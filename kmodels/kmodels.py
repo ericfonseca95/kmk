@@ -268,6 +268,27 @@ def TLNN(model, X, change_layers=1):
             p.requires_grad = True
     return new
 
+def TLLSTM(model, X, change_layers=1):
+    new = LSTM(n_lstm_layers=model.lstm_layers, n_lstm_outputs=model.n_lstm_outputs,
+               lstm_hidden_size=model.n_lstm_hidden_size, n_inputs=model.n_inputs,
+               n_timesteps=model.n_timesteps, n_linear_layers=model.n_linear_layers,
+               linear_layer_size=model.linear_layer_size)
+    test = new(X)
+    new.load_state_dict(model.state_dict())
+    children = [child for child in new.children()]
+    for child in children:
+        for param in child.parameters():
+            param.requires_grad = False
+    total_layers = len(children)
+    for i in range(change_layers):
+        layer = children[total_layers-i-1]
+        layer_params = layer.parameters()
+        for p in layer_params:
+            p.requires_grad = True
+    return new
+
+
+
 class NN(nn.Module):
     def __init__(self, n_inputs=106, n_outputs=1, layers=3, layer_size=75):
         """
@@ -311,3 +332,39 @@ class NN(nn.Module):
             x = F.relu(fc(x))
         x = self.fout(x)
         return x
+    
+class LSTM(nn.Module):
+    def __init__(self, n_lstm_layers=3, n_lstm_outputs=50, 
+                 lstm_hidden_size=3, n_inputs=8, n_outputs=3, 
+                 n_timesteps=204, n_linear_layers=1, linear_layer_size=50):
+        super(LSTM, self).__init__()
+        self.lstm_layers = n_lstm_layers
+        self.n_lstm_hidden_size = lstm_hidden_size
+        self.n_lstm_outputs = n_lstm_outputs
+        self.n_inputs = n_inputs
+        self.n_outputs = n_outputs
+        self.n_timesteps = n_timesteps
+        self.n_linear_layers = n_linear_layers
+        self.linear_layer_size = linear_layer_size
+        self.lstm_output_dim = n_timesteps*n_lstm_layers
+        
+        self.lstm = nn.LSTM(input_size=n_inputs, 
+                            hidden_size=lstm_hidden_size, 
+                            num_layers=n_lstm_layers)
+        
+        self.linear_layers = nn.ModuleList()
+        self.first_linear_layer = nn.Linear(self.lstm_output_dim, linear_layer_size)
+        for i in range(n_linear_layers):
+            self.linear_layers.append(nn.Linear(linear_layer_size, linear_layer_size))
+        self.output_layer = nn.Linear(linear_layer_size, n_outputs*self.n_timesteps)
+    
+    def forward(self, x):
+        x, _ = self.lstm(x)
+        # make sure x in flattened
+        x = x.flatten()
+        x = self.first_linear_layer(x)
+        for layer in self.linear_layers:
+            x = layer(x)
+        x = self.output_layer(x)
+        return x.reshape(self.n_timesteps, self.n_outputs)
+    
