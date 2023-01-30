@@ -36,8 +36,13 @@ def run_epochs(model, X_train, Y_train, loss_func, optimizer, batches, n_epochs=
            # i = indicies[i]
             optimizer.zero_grad()   # clear gradients for next train
             x = X_train[i,:].to(device)
-            y = Y_train[i,:].to(device)
-            pred = model(x)
+            y = Y_train[i,:].to(device).flatten()
+            pred = model(x).flatten()
+            # check if y and pred are the same shape
+            if y.shape != pred.shape:
+                print('y and pred are not the same shape')
+                print(y.shape, pred.shape)
+                break
             loss = loss_func(pred, y) # must be (1. nn output, 2. target)
             loss.backward()         # backpropagation, compute gradients
             optimizer.step()        # apply gradients
@@ -189,13 +194,55 @@ class Dataset(torch.utils.data.Dataset):
         # make sure the df is ordered by subject
         self.df = self.df.sort_values(by=sort_column)
         self.subject_index = [i.values for i in self.df.groupby(sort_column).apply(lambda x: x.index)]
+        self.subject_index = [sorted(i) for i in self.subject_index]
         self.subjects = list(self.df.groupby(sort_column).groups.keys())
+        # sort the subject list index. self.subjects contains a list of indices for that belong to each subject. lets sort each list in ascending order
+        
+        
+        
+        # for each subject multiple trails are run. lets split them up and make a list of lists for each subject. The way we know a 
+        # new event has started is when the time column resets to its minimum value.
+        self.subject_events = []
+        time_splits = []
+        for subject in self.subject_index:
+            # get the time column for the subject
+            time = self.df.loc[subject]['Time'].values
+            # get the indices where the time resets to its minimum value
+            time_splits.append(np.where(time == time.min())[0])
+            # split the subject index into events
+            self.subject_events.append(np.split(subject, time_splits[-1]))
+        # reorganize the dataframe in the order of subject_events
+        self.df = pd.concat([pd.concat([self.df.loc[subject] for subject in event]) for event in self.subject_events])
+        self.df = self.df.reset_index(drop=True)
+        self.subject_index = [i.values for i in self.df.groupby(sort_column).apply(lambda x: x.index)]
+        self.subject_index = [sorted(i) for i in self.subject_index]
+        # remake subjects_events to be consistent with the new dataframe
+        self.subject_events = []
+        time_splits = []
+        for subject in self.subject_index:
+            # get the time column for the subject
+            time = self.df.loc[subject]['Time'].values
+            # get the indices where the time resets to its minimum value
+            time_splits.append(np.where(time == time.min())[0])
+            # split the subject index into events
+            self.subject_events.append(np.split(subject, time_splits[-1]))
+        print(len(self.subject_events))
+        # get rid of the empty lists in the list of lists
+        self.subject_events = [[i for i in subject if len(i) > 0] for subject in self.subject_events]
+  
+        
         self.xcols = xcols
         self.ycols = ycols
         self.X = df[xcols].values
         self.Y = df[ycols].values
         self.X = torch.from_numpy(self.X).reshape(-1, len(xcols))
         self.Y = torch.from_numpy(self.Y).reshape(-1, len(ycols))
+        self.n_time_steps = len(self.subject_events[0][0])
+        self.X_lstm = self.X.view(-1, self.n_time_steps, len(xcols))
+        self.X_lstm = self.X_lstm.float()
+        self.Y = self.Y.float()
+        self.Y_lstm = self.Y.view(-1, self.n_time_steps, len(ycols))
+    
         
     def __getitem__(self, index):
         return self.X[self.subject_index[index]].view(-1, len(self.xcols)), self.Y[self.subject_index[index]]
