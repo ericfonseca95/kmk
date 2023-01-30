@@ -1,0 +1,10 @@
+LICENSE
+README.md
+setup.py
+kmodels/__init__.py
+kmodels/kmodels.py
+kmodels.egg-info/PKG-INFO
+kmodels.egg-info/SOURCES.txt
+kmodels.egg-info/dependency_links.txt
+kmodels.egg-info/requires.txt
+kmodels.egg-info/top_level.txt
