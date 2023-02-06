@@ -191,6 +191,8 @@ def random_search(df, xcols = ['EPB', 'EPL', 'FPL', 'APL', 'ADD', 'FCU', 'FPB', 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, df, xcols = ['EPB', 'EPL', 'FPL', 'APL', 'ADD', 'FCU', 'FPB', 'OPP'], ycols = ['Fx','Fy','Fz'], sort_column=['Event','Subject']):
         self.df = df
+        self.window_size = 100
+        self.stride = 10
         # make sure the df is ordered by subject
         self.df = self.df.sort_values(by=sort_column)
         self.subject_index = [i.values for i in self.df.groupby(sort_column).apply(lambda x: x.index)]
@@ -229,7 +231,18 @@ class Dataset(torch.utils.data.Dataset):
         print(len(self.subject_events))
         # get rid of the empty lists in the list of lists
         self.subject_events = [[i for i in subject if len(i) > 0] for subject in self.subject_events]
-  
+        # for each subject-event we need to decompose the sequence using a window and stride
+        self.subject_event_windows = []
+        for subject in self.subject_events:
+            subject_windows = []
+            for event in subject:
+                # get the number of windows
+                n_windows = int(np.floor((len(event) - self.window_size)/self.stride) + 1)
+                # get the windows
+                windows = [event[i*self.stride:i*self.stride+self.window_size] for i in range(n_windows)]
+                subject_windows.append(windows)
+            self.subject_event_windows.append(subject_windows)
+        
         
         self.xcols = xcols
         self.ycols = ycols
@@ -238,10 +251,15 @@ class Dataset(torch.utils.data.Dataset):
         self.X = torch.from_numpy(self.X).reshape(-1, len(xcols))
         self.Y = torch.from_numpy(self.Y).reshape(-1, len(ycols))
         self.n_time_steps = len(self.subject_events[0][0])
-        self.X_lstm = self.X.view(-1, self.n_time_steps, len(xcols))
-        self.X_lstm = self.X_lstm.float()
+        print(X[self.subject_event_windows[0][0][0]].shape)
+        # using the subject_windows lets concatenate the data into a single tensor. the first dim is the total number of windows in the dataset
+        # the second dim is the number of time steps in each window. the third dim is the number of features in each time step
+        self.X_lstm = torch.cat([torch.cat([self.X[subject_event_window].view(1, -1, len(xcols)) for subject_event_window in subject_event_windows], dim=0) for subject_event_windows in self.subject_event_windows], dim=0)
+        self.Y_lstm = self.Y_lstm.float()
+        #self.X_lstm = self.X.view(-1, self.n_time_steps, len(xcols))
+        #self.X_lstm = self.X_lstm.float()
         self.Y = self.Y.float()
-        self.Y_lstm = self.Y.view(-1, self.n_time_steps, len(ycols))
+        #self.Y_lstm = self.Y.view(-1, self.n_time_steps, len(ycols))
     
         
     def __getitem__(self, index):

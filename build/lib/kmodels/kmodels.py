@@ -36,8 +36,13 @@ def run_epochs(model, X_train, Y_train, loss_func, optimizer, batches, n_epochs=
            # i = indicies[i]
             optimizer.zero_grad()   # clear gradients for next train
             x = X_train[i,:].to(device)
-            y = Y_train[i,:].to(device)
-            pred = model(x)
+            y = Y_train[i,:].to(device).flatten()
+            pred = model(x).flatten()
+            # check if y and pred are the same shape
+            if y.shape != pred.shape:
+                print('y and pred are not the same shape')
+                print(y.shape, pred.shape)
+                break
             loss = loss_func(pred, y) # must be (1. nn output, 2. target)
             loss.backward()         # backpropagation, compute gradients
             optimizer.step()        # apply gradients
@@ -186,16 +191,76 @@ def random_search(df, xcols = ['EPB', 'EPL', 'FPL', 'APL', 'ADD', 'FCU', 'FPB', 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, df, xcols = ['EPB', 'EPL', 'FPL', 'APL', 'ADD', 'FCU', 'FPB', 'OPP'], ycols = ['Fx','Fy','Fz'], sort_column=['Event','Subject']):
         self.df = df
+        self.window_size = 100
+        self.stride = 10
         # make sure the df is ordered by subject
         self.df = self.df.sort_values(by=sort_column)
         self.subject_index = [i.values for i in self.df.groupby(sort_column).apply(lambda x: x.index)]
+        self.subject_index = [sorted(i) for i in self.subject_index]
         self.subjects = list(self.df.groupby(sort_column).groups.keys())
+        # sort the subject list index. self.subjects contains a list of indices for that belong to each subject. lets sort each list in ascending order
+        
+        
+        
+        # for each subject multiple trails are run. lets split them up and make a list of lists for each subject. The way we know a 
+        # new event has started is when the time column resets to its minimum value.
+        self.subject_events = []
+        time_splits = []
+        for subject in self.subject_index:
+            # get the time column for the subject
+            time = self.df.loc[subject]['Time'].values
+            # get the indices where the time resets to its minimum value
+            time_splits.append(np.where(time == time.min())[0])
+            # split the subject index into events
+            self.subject_events.append(np.split(subject, time_splits[-1]))
+        # reorganize the dataframe in the order of subject_events
+        self.df = pd.concat([pd.concat([self.df.loc[subject] for subject in event]) for event in self.subject_events])
+        self.df = self.df.reset_index(drop=True)
+        self.subject_index = [i.values for i in self.df.groupby(sort_column).apply(lambda x: x.index)]
+        self.subject_index = [sorted(i) for i in self.subject_index]
+        # remake subjects_events to be consistent with the new dataframe
+        self.subject_events = []
+        time_splits = []
+        for subject in self.subject_index:
+            # get the time column for the subject
+            time = self.df.loc[subject]['Time'].values
+            # get the indices where the time resets to its minimum value
+            time_splits.append(np.where(time == time.min())[0])
+            # split the subject index into events
+            self.subject_events.append(np.split(subject, time_splits[-1]))
+        print(len(self.subject_events))
+        # get rid of the empty lists in the list of lists
+        self.subject_events = [[i for i in subject if len(i) > 0] for subject in self.subject_events]
+        # for each subject-event we need to decompose the sequence using a window and stride
+        self.subject_event_windows = []
+        for subject in self.subject_events:
+            subject_windows = []
+            for event in subject:
+                # get the number of windows
+                n_windows = int(np.floor((len(event) - self.window_size)/self.stride) + 1)
+                # get the windows
+                windows = [event[i*self.stride:i*self.stride+self.window_size] for i in range(n_windows)]
+                subject_windows.append(windows)
+            self.subject_event_windows.append(subject_windows)
+        
+        
         self.xcols = xcols
         self.ycols = ycols
         self.X = df[xcols].values
         self.Y = df[ycols].values
         self.X = torch.from_numpy(self.X).reshape(-1, len(xcols))
         self.Y = torch.from_numpy(self.Y).reshape(-1, len(ycols))
+        self.n_time_steps = len(self.subject_events[0][0])
+        print(X[self.subject_event_windows[0][0][0]].shape)
+        # using the subject_windows lets concatenate the data into a single tensor. the first dim is the total number of windows in the dataset
+        # the second dim is the number of time steps in each window. the third dim is the number of features in each time step
+        self.X_lstm = torch.cat([torch.cat([self.X[subject_event_window].view(1, -1, len(xcols)) for subject_event_window in subject_event_windows], dim=0) for subject_event_windows in self.subject_event_windows], dim=0)
+        self.Y_lstm = self.Y_lstm.float()
+        #self.X_lstm = self.X.view(-1, self.n_time_steps, len(xcols))
+        #self.X_lstm = self.X_lstm.float()
+        self.Y = self.Y.float()
+        #self.Y_lstm = self.Y.view(-1, self.n_time_steps, len(ycols))
+    
         
     def __getitem__(self, index):
         return self.X[self.subject_index[index]].view(-1, len(self.xcols)), self.Y[self.subject_index[index]]
@@ -220,6 +285,27 @@ def TLNN(model, X, change_layers=1):
         for p in layer_params:
             p.requires_grad = True
     return new
+
+def TLLSTM(model, X, change_layers=1):
+    new = LSTM(n_lstm_layers=model.lstm_layers, n_lstm_outputs=model.n_lstm_outputs,
+               lstm_hidden_size=model.n_lstm_hidden_size, n_inputs=model.n_inputs,
+               n_timesteps=model.n_timesteps, n_linear_layers=model.n_linear_layers,
+               linear_layer_size=model.linear_layer_size)
+    test = new(X)
+    new.load_state_dict(model.state_dict())
+    children = [child for child in new.children()]
+    for child in children:
+        for param in child.parameters():
+            param.requires_grad = False
+    total_layers = len(children)
+    for i in range(change_layers):
+        layer = children[total_layers-i-1]
+        layer_params = layer.parameters()
+        for p in layer_params:
+            p.requires_grad = True
+    return new
+
+
 
 class NN(nn.Module):
     def __init__(self, n_inputs=106, n_outputs=1, layers=3, layer_size=75):
@@ -264,3 +350,39 @@ class NN(nn.Module):
             x = F.relu(fc(x))
         x = self.fout(x)
         return x
+    
+class LSTM(nn.Module):
+    def __init__(self, n_lstm_layers=3, n_lstm_outputs=50, 
+                 lstm_hidden_size=3, n_inputs=8, n_outputs=3, 
+                 n_timesteps=204, n_linear_layers=1, linear_layer_size=50):
+        super(LSTM, self).__init__()
+        self.lstm_layers = n_lstm_layers
+        self.n_lstm_hidden_size = lstm_hidden_size
+        self.n_lstm_outputs = n_lstm_outputs
+        self.n_inputs = n_inputs
+        self.n_outputs = n_outputs
+        self.n_timesteps = n_timesteps
+        self.n_linear_layers = n_linear_layers
+        self.linear_layer_size = linear_layer_size
+        self.lstm_output_dim = n_timesteps*n_lstm_layers
+        
+        self.lstm = nn.LSTM(input_size=n_inputs, 
+                            hidden_size=lstm_hidden_size, 
+                            num_layers=n_lstm_layers)
+        
+        self.linear_layers = nn.ModuleList()
+        self.first_linear_layer = nn.Linear(self.lstm_output_dim, linear_layer_size)
+        for i in range(n_linear_layers):
+            self.linear_layers.append(nn.Linear(linear_layer_size, linear_layer_size))
+        self.output_layer = nn.Linear(linear_layer_size, n_outputs*self.n_timesteps)
+    
+    def forward(self, x):
+        x, _ = self.lstm(x)
+        # make sure x in flattened
+        x = x.flatten()
+        x = self.first_linear_layer(x)
+        for layer in self.linear_layers:
+            x = layer(x)
+        x = self.output_layer(x)
+        return x.reshape(self.n_timesteps, self.n_outputs)
+    
