@@ -3,6 +3,7 @@ README.md
 setup.py
 kmodels/__init__.py
 kmodels/kmodels.py
+kmodels/utils.py
 kmodels.egg-info/PKG-INFO
 kmodels.egg-info/SOURCES.txt
 kmodels.egg-info/dependency_links.txt
