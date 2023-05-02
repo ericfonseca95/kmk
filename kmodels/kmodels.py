@@ -137,13 +137,13 @@ class LSTM(nn.Module):
 class VAE(nn.Module):
     # make all the inputs here have default so that we can use kwargs   
     #def __init__(self, input_dim, hidden_dim, latent_dim, n_layers, formula_dim):
-    def __init__(self, input_dim=106, hidden_dim=75, latent_dim=50, n_layers=3, formula_dim=3):
+    def __init__(self, input_dim=106, hidden_dim=75, latent_dim=50, n_layers=3, binary_dim=3):
         super(VAE, self).__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.latent_dim = latent_dim
         self.n_layers = n_layers
-        self.formula_dim = formula_dim
+        self.binary_dim = binary_dim
         self.encoder_layers = n_layers  
         self.decoder_layers = n_layers
         # encoder with n_layers
@@ -184,7 +184,7 @@ class VAE(nn.Module):
         for layer in self.decoder_layers:
             z = F.relu(layer(z))
         out = self.out3(z)
-        out[:, :self.formula_dim] = F.softmax(out[:, :self.formula_dim], dim=1)
+        out[:, :self.binary_dim] = F.softmax(out[:, :self.binary_dim], dim=1)
         return out
     
     def forward(self, x):
