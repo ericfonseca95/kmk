@@ -317,9 +317,9 @@ class Regression_loss():
     def __init__(self, reg_factor):
         self.reg_factor = reg_factor
         self.reg_loss = []
-    def __call__(self, z, y, batch_idx):
+    def __call__(self, z, y):
         # save the model
-        self.reg = LinearRegression().fit(z.detach().cpu().numpy(), y[batch_idx, :].detach().cpu().numpy())
+        self.reg = LinearRegression().fit(z.detach().cpu().numpy(), y.detach().cpu().numpy())
         y_pred = self.reg.predict(z.detach().cpu().numpy())
         self.reg_loss.append(F.mse_loss(torch.from_numpy(y_pred), y))
         return self.reg_loss[-1]
@@ -444,7 +444,7 @@ class Training:
 
         if self.y is not None and self.reg_factor > 0:
             z = self.model.encode(data)[0]
-            regression_loss = self.regression_loss(z, self.y, batch_idx)
+            regression_loss = self.regression_loss(z, self.y[batch_idx])
             total_loss += regression_loss
         
         return total_loss
