@@ -1,19 +1,25 @@
 # Imports
+from typing import Any
 import matplotlib.pyplot as plt
+from . import utils
 import pandas as pd
 import time
 import numpy as np
 import gc
 from sklearn.preprocessing import StandardScaler
 import torch
-from . import utils
 import torch.nn as nn
+from sklearn.base import BaseEstimator, RegressorMixin
 from torch.nn import functional as F
 # get ModuleList from torch.nn
 from torch.nn import ModuleList
+from torch.utils.data import Dataset, DataLoader
+from torch import optim
 # create a cv function
 from sklearn.model_selection import KFold
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
+
+
 def TLNN(model, X, change_layers=1):
     new = NN(layers=model.layers, layer_size=model.layer_size,
                 n_inputs=model.n_inputs, n_outputs=model.n_outputs)
@@ -29,6 +35,19 @@ def TLNN(model, X, change_layers=1):
         layer_params = layer.parameters()
         for p in layer_params:
             p.requires_grad = True
+    new.params.update(locals())
+    try:
+        new.params.pop('kwargs')
+    except:
+        pass
+    try:
+        new.parmas.pop('X')
+    except:
+        pass
+    try:
+        new.params.pop('self')
+    except:
+        pass
     return new
 
 def TLLSTM(model, X, change_layers=1):
@@ -48,12 +67,25 @@ def TLLSTM(model, X, change_layers=1):
         layer_params = layer.parameters()
         for p in layer_params:
             p.requires_grad = True
+    new.params.update(locals())
+    try:
+        new.params.pop('kwargs')
+    except:
+        pass
+    try:
+        new.parmas.pop('X')
+    except:
+        pass
+    try:
+        new.params.pop('self')
+    except:
+        pass
     return new
 
 
 
-class NN(nn.Module):
-    def __init__(self, n_inputs=106, n_outputs=1, layers=3, layer_size=75):
+class NN(BaseEstimator, nn.Module):
+    def __init__(self, n_inputs=106, n_outputs=1, layers=3, layer_size=75, change_layers=0, **kwargs):
         """
         Initialize the NN model with a given number of layers and layer size.
         
@@ -63,14 +95,22 @@ class NN(nn.Module):
         - layer_size (int): The number of neurons in each fully connected layer.
         """
         super(NN, self).__init__()
+        self.model_type = 'NN'
         self.n_inputs = n_inputs
         self.n_outputs = n_outputs
         self.layer_size = layer_size
         self.layers = layers
+        self.change_layers = change_layers
+        # set all keys in kwargs as attributes
+        for key in kwargs:
+            setattr(self, key, kwargs[key])
+        self.fc1 = nn.Linear(self.n_inputs, self.layer_size)
+        self.fcs = ModuleList([nn.Linear(self.layer_size, self.layer_size) for i in range(self.layers)])
+        self.fout = nn.Linear(self.layer_size, self.n_outputs)
         
-        self.fc1 = nn.Linear(n_inputs, layer_size)
-        self.fcs = ModuleList([nn.Linear(layer_size, layer_size) for i in range(layers)])
-        self.fout = nn.Linear(layer_size, n_outputs)
+
+        self.params = {'model_type':self.model_type, 'n_inputs': self.n_inputs, 'n_outputs': self.n_outputs, 'layers': self.layers, 'layer_size': self.layer_size, 'change_layers': self.change_layers}
+        return 
 
     def forward(self, x):
         """
@@ -96,6 +136,97 @@ class NN(nn.Module):
         x = self.fout(x)
         return x
     
+    def update_params(self, config: dict):
+        for key in config:
+            if hasattr(self, key):
+                setattr(self, key, config[key])
+        # update config
+        self.params.update({i : config[i] for i in config if i in self.params})
+        # Re-initialize the model with the updated parameters
+        self.__init__(
+            n_inputs=self.n_inputs,
+            n_outputs=self.n_outputs,
+            layers=self.layers,
+            layer_size=self.layer_size,
+            change_layers=self.change_layers
+        )
+        return self
+  
+class CNN(nn.Module):
+    def __init__(self, fc_layers=3, n_outputs=1, fc_size=75, n_inputs=52, kernel_size=3, 
+                 out_channels=(3, 10), conv_layers=2, **kwargs):
+        """
+        Initialize the convolutional model with a given number of fc_layers, output size, and layer size.
+        
+        Args:
+        - fc_layers (int): The number of fully connected fc_layers in the model.
+        - n_outputs (int): The number of output classes for the model.
+        - fc_size (int): The number of neurons in each fully connected layer.
+        - n_inputs (int): The number of input features for the model.
+        - kernel_size (int): The kernel size for the convolutional fc_layers.
+        - out_channels (tuple): The number of output channels for the convolutional fc_layers.
+        """
+        super(CNN, self).__init__()
+        self.fc_layers = fc_layers
+        self.model_type = 'CNN'
+        self.fc_size = fc_size
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.n_inputs = n_inputs
+        self.n_outputs = n_outputs
+        self.c1 = nn.Conv1d(1, out_channels[0], 2)
+        self.c2 = nn.Conv1d(out_channels[0], out_channels[1], 2)
+        self.p1 = nn.AvgPool1d(2, 2)
+        self.fc1 = nn.Linear(138, self.fc_size)
+        self.fcs = ModuleList([nn.Linear(self.fc_size, self.fc_size) for i in range(fc_layers-1)])
+        self.fout = nn.Linear(self.fc_size, n_outputs)
+        self.params = {'model_type':'Conv', 'fc_layers': self.fc_layers, 'fc_size': self.fc_size, 
+                       'out_channels': self.out_channels, 'kernel_size': self.kernel_size, 
+                       'n_inputs': self.n_inputs, 'n_outputs': self.n_outputs}
+        if conv_layers != len(out_channels):
+            self.out_channels = [out_channels[0] for i in range(conv_layers)]
+        # set all keys in kwargs as attributes
+        for key in kwargs:
+            setattr(self, key, kwargs[key])
+    
+    def forward(self,x):
+        rows = x.shape[0]
+        cols = x.shape[1]
+        x = x.reshape(rows, 1, cols)
+        x = F.relu(self.c1(x))
+        x = self.p1(x)
+        x = F.relu(self.c2(x))
+        x = self.p1(x)
+        x = torch.flatten(x).reshape(rows, -1)
+        try:
+            x = F.relu(self.fc1(x))
+        except:
+            try:
+                self.fc1 = nn.Linear(x.shape[1], self.fc_size)
+                x = F.relu(self.fc1(x))
+            except:
+                self.fc1 = nn.Linear(x.shape[1], self.fc_size).to('cuda')
+                x = F.relu(self.fc1(x))
+        for fc in self.fcs:
+            x = F.relu(fc(x))
+        x = self.fout(x)
+        return x
+
+
+    def update_params(self, config: dict):
+        for key in config:
+            if hasattr(self, key):
+                setattr(self, key, config[key])
+        # update config
+        self.params
+        
+    def to(self, device):
+        self.device = device
+        return super().to(device)
+
+
+        
+    
 class LSTM(nn.Module):
     def __init__(self, n_lstm_layers=3, n_lstm_outputs=50, 
                  lstm_hidden_size=3, n_inputs=8, n_outputs=3, 
@@ -120,6 +251,15 @@ class LSTM(nn.Module):
         for i in range(n_linear_layers):
             self.linear_layers.append(nn.Linear(linear_layer_size, linear_layer_size))
         self.output_layer = nn.Linear(linear_layer_size, n_outputs*self.n_timesteps)
+        self.params = {}
+        kwargs = locals()
+        for key in kwargs:
+            self.params[key] = kwargs[key]
+        try:
+            self.params.pop('self')
+        except KeyError:
+            pass
+        return
     
     def forward(self, x):
         x, _ = self.lstm(x)
@@ -130,6 +270,25 @@ class LSTM(nn.Module):
             x = layer(x)
         x = self.output_layer(x)
         return x.reshape(self.n_timesteps, self.n_outputs)
+    
+    def update_params(self, param_dict):
+        for key in param_dict:
+            if hasattr(self, key):
+                setattr(self, key, param_dict[key])
+        
+        # Re-initialize the model with the updated parameters
+        self.__init__(
+            n_lstm_layers=self.n_lstm_layers,
+            n_lstm_outputs=self.n_lstm_outputs,
+            lstm_hidden_size=self.lstm_hidden_size,
+            n_inputs=self.n_inputs,
+            n_outputs=self.n_outputs,
+            n_timesteps=self.n_timesteps,
+            n_linear_layers=self.n_linear_layers,
+            linear_layer_size=self.linear_layer_size
+        )
+        
+        return self
     
     
   
@@ -166,7 +325,16 @@ class VAE(nn.Module):
             self.decoder_layers,
             self.out3
         )
-        
+        self.params = {}
+        kwargs = locals()
+        for key in kwargs:
+            self.params[key] = kwargs[key]
+        try:
+            self.params.pop('self')
+        except:
+            pass
+        return 
+    
     def encode(self, x):
         x = F.relu(self.fc1(x))
         for layer in self.encoder_layers:
@@ -192,6 +360,21 @@ class VAE(nn.Module):
         z = self.reparameterize(mu, logvar)
         return self.decode(z), mu, logvar
     
+    def update_params(self, param_dict):
+        for key in param_dict:
+            if hasattr(self, key):
+                setattr(self, key, param_dict[key])
+        
+        # Re-initialize the model with the updated parameters
+        self.__init__(
+            input_dim=self.input_dim,
+            hidden_dim=self.hidden_dim,
+            latent_dim=self.latent_dim,
+            n_layers=self.n_layers,
+            binary_dim=self.binary_dim
+        )
+        
+        return self
     
 # create an identical VAE class but make it heirarchical
 class Hierach_VAE(nn.Module):
@@ -212,6 +395,11 @@ class Hierach_VAE(nn.Module):
             setattr(self, 'decoder_layer_{}'.format(i), nn.Linear(self.layer_topologies[-i-1], self.layer_topologies[-i-2]))
         self.out3 = nn.Linear(self.layer_topologies[0], self.input_dim) 
         self.decoder_layers = [getattr(self, 'decoder_layer_{}'.format(i)) for i in range(self.n_layers)]
+        self.params = {}
+        kwargs = locals()
+        for key in kwargs:
+            self.params[key] = kwargs[key]
+        self.params.pop('self')
         
     def encode(self, x):
         x = F.relu(self.fc1(x))
@@ -234,3 +422,17 @@ class Hierach_VAE(nn.Module):
         mu, logvar = self.encode(x.view(-1, self.input_dim))
         z = self.reparameterize(mu, logvar)
         return self.decode(z), mu, logvar
+    
+    def update_params(self, param_dict):
+        for key in param_dict:
+            if hasattr(self, key):
+                setattr(self, key, param_dict[key])
+        
+        # Re-initialize the model with the updated parameters
+        self.__init__(
+            input_dim=self.input_dim,
+            latent_dim=self.latent_dim,
+            n_layers=self.n_layers
+        )
+        
+        return self
