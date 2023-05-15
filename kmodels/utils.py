@@ -613,7 +613,7 @@ class Trainer(BaseEstimator, RegressorMixin):
                 self.estimator, self.optimizer = get_model(self.config)
                 self.estimator = self.estimator.to(self.device)
                 self.estimator.update_params(self.config)
-                self.estimator = self.estimator
+                self.estimator = self.estimator.to(self.device)
                 self.estimator_params = self.estimator.params
                 self.config.update(self.estimator_params)
             self.estimator_params = {k:v for k, v in self.config.items() if k in self.estimator_params}

@@ -222,6 +222,8 @@ class CNN(nn.Module):
         
     def to(self, device):
         self.device = device
+        for i in self.fcs:
+            i.to(device)
         return super().to(device)
 
 
