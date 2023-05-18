@@ -12,6 +12,7 @@ import torch.nn as nn
 from sklearn.base import BaseEstimator, RegressorMixin
 from torch.nn import functional as F
 # get ModuleList from torch.nn
+
 from torch.nn import ModuleList
 from torch.utils.data import Dataset, DataLoader
 from torch import optim
@@ -95,7 +96,7 @@ class NN(BaseEstimator, nn.Module):
         - layer_size (int): The number of neurons in each fully connected layer.
         """
         super(NN, self).__init__()
-        self.model_type = 'NN'
+        self.estimator_type = 'NN'
         self.n_inputs = n_inputs
         self.n_outputs = n_outputs
         self.layer_size = layer_size
@@ -107,9 +108,10 @@ class NN(BaseEstimator, nn.Module):
         self.fc1 = nn.Linear(self.n_inputs, self.layer_size)
         self.fcs = ModuleList([nn.Linear(self.layer_size, self.layer_size) for i in range(self.layers)])
         self.fout = nn.Linear(self.layer_size, self.n_outputs)
-        
 
-        self.params = {'model_type':self.model_type, 'n_inputs': self.n_inputs, 'n_outputs': self.n_outputs, 'layers': self.layers, 'layer_size': self.layer_size, 'change_layers': self.change_layers}
+        self.params = {'estimator_type':self.estimator_type, 'n_inputs': self.n_inputs, 
+                       'n_outputs': self.n_outputs, 'layers': self.layers, \
+                           'layer_size': self.layer_size, 'change_layers': self.change_layers}
         return 
 
     def forward(self, x):
@@ -152,7 +154,7 @@ class NN(BaseEstimator, nn.Module):
         )
         return self
   
-class CNN(nn.Module):
+class CNN(BaseEstimator, nn.Module):
     def __init__(self, fc_layers=3, n_outputs=1, fc_size=75, n_inputs=52, kernel_size=3, 
                  out_channels=(3, 10), conv_layers=2, **kwargs):
         """
@@ -168,36 +170,46 @@ class CNN(nn.Module):
         """
         super(CNN, self).__init__()
         self.fc_layers = fc_layers
-        self.model_type = 'CNN'
+        self.estimator_type = 'CNN'
+        self.conv_padding = 0
         self.fc_size = fc_size
         self.out_channels = out_channels
         self.kernel_size = kernel_size
         self.n_inputs = n_inputs
         self.n_outputs = n_outputs
-        self.c1 = nn.Conv1d(1, out_channels[0], 2)
-        self.c2 = nn.Conv1d(out_channels[0], out_channels[1], 2)
-        self.p1 = nn.AvgPool1d(2, 2)
+        self.conv_layers = conv_layers
+        self.conv_channels = [1] + list(out_channels)
+        self.cs = ModuleList([nn.Conv1d(self.conv_channels[i], self.conv_channels[i+1], self.kernel_size) for i in range(len(out_channels)-1)])
         self.fc1 = nn.Linear(138, self.fc_size)
         self.fcs = ModuleList([nn.Linear(self.fc_size, self.fc_size) for i in range(fc_layers-1)])
         self.fout = nn.Linear(self.fc_size, n_outputs)
-        self.params = {'model_type':'Conv', 'fc_layers': self.fc_layers, 'fc_size': self.fc_size, 
+        self.params = {'estimator_type':'CNN', 'fc_layers': self.fc_layers, 'fc_size': self.fc_size, 
                        'out_channels': self.out_channels, 'kernel_size': self.kernel_size, 
-                       'n_inputs': self.n_inputs, 'n_outputs': self.n_outputs}
-        if conv_layers != len(out_channels):
-            self.out_channels = [out_channels[0] for i in range(conv_layers)]
-        # set all keys in kwargs as attributes
+                       'conv_layers': self.conv_layers,
+                       'n_inputs': self.n_inputs, 'n_outputs': self.n_outputs, 'conv_padding': self.conv_padding}
+         # set all keys in kwargs as attributes
         for key in kwargs:
             setattr(self, key, kwargs[key])
+            
+        if self.conv_layers != len(self.out_channels):
+            self.out_channels = [out_channels[0] for i in range(conv_layers)]
+
+        # update params with matching keys in self.__dict__
+        self.params.update({i : self.__dict__[i] for i in self.__dict__ if i in self.params})
     
     def forward(self,x):
         rows = x.shape[0]
         cols = x.shape[1]
         x = x.reshape(rows, 1, cols)
-        x = F.relu(self.c1(x))
-        x = self.p1(x)
-        x = F.relu(self.c2(x))
-        x = self.p1(x)
-        x = torch.flatten(x).reshape(rows, -1)
+        # check if x is on the same device as the model, if not, move it
+        if x.device != self.device:
+            x = x.to(self.device)
+        for conv in self.cs:
+            x = F.relu(conv(x))
+            # pool average
+            x = F.avg_pool1d(x, self.kernel_size)
+        x = x.flatten().reshape(rows, -1)
+        
         try:
             x = F.relu(self.fc1(x))
         except:

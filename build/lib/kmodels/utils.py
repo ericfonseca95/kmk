@@ -314,8 +314,9 @@ class VAE_loss():
         self.reg_loss.append(BCE + KLD)
         return BCE + KLD
 
-class Regression_loss():
+class Regression_loss(nn.Module):
     def __init__(self, reg_factor):
+        super(Regression_loss, self).__init__()
         self.reg_factor = reg_factor
         self.reg_loss = []
     def __call__(self, z, y):
@@ -330,23 +331,27 @@ class Regression_loss():
     def __iter__(self):
         return iter(self.reg_loss)
     
-class L2_regularization():
+class L2_regularization(nn.Module):
     def __init__(self, gamma):
+        super(L2_regularization, self).__init__()
         self.gamma = gamma
         self.reg_loss = []
     def __call__(self, model):
         for param in model.parameters():
-            self.reg_loss.append(0.5 * self.gamma * torch.sum(torch.pow(param, 2)).detach().numpy())
+            self.reg_loss.append(0.5 * self.gamma * torch.sum(torch.pow(param, 2)))
         return self.reg_loss[-1]
 
-class L1_regularization():
+class L1_regularization(nn.Module):
     def __init__(self, beta):
+        super(L1_regularization, self).__init__()
         self.beta = beta
         self.reg_loss = []
     def __call__(self, model):
         for param in model.parameters():
             self.reg_loss.append(self.beta * torch.sum(torch.abs(param)))
         return self.reg_loss[-1]
+    def __iter__(self):
+        return iter(self.reg_loss)
     
 
 class MSE_Loss(nn.Module):
@@ -356,6 +361,7 @@ class MSE_Loss(nn.Module):
         # for the binary variables we want to use binary cross entropy
         self.bce = nn.BCELoss()
         self.mse = nn.MSELoss()
+        
     def __call__(self, x, y):
         if self.binary_dim_y > 0:
             self.binary_loss = self.bce(x[:, :self.binary_dim_y], y[:, :self.binary_dim_y])
@@ -366,23 +372,7 @@ class MSE_Loss(nn.Module):
             return self.total_loss
         else:
             return self.mse(x, y)
-# lets write a general training class that will work for all of our models. We also want this to 
-# incorporate with all the sklearn functionality so we can use gridsearchCV and other tools
-# lets predefine all params in the init function and then have a fit function that will train the model
 
-def get_model(config : dict):
-    if 'lr_init' not in config.keys():
-        config['lr_init'] = 0.001
-    model_type = config['estimator_type']
-    if model_type == 'NN':
-        model = models.NN(**config)
-    elif model_type == 'VAE':
-        model = models.VAE(**config)
-    elif model_type == 'LSTM':
-        model = models.LSTM(**config)
-    elif model_type == 'CNN':
-        model = models.CNN(**config)
-    return model, optim.Adam(model.parameters(), lr=config['lr_init'])
 
     
 class custom_loss(nn.MSELoss):
@@ -435,64 +425,69 @@ class custom_loss(nn.MSELoss):
         total_loss = mse_loss + extra_loss
         return total_loss
     
-    
-def get_model_params(config: dict):
-    model, opt =   get_model(config)
+# lets write a general training class that will work for all of our models. We also want this to 
+# incorporate with all the sklearn functionality so we can use gridsearchCV and other tools
+# lets predefine all params in the init function and then have a fit function that will train the model
+
+def get_model(estimator_type: str, config: dict):
+    if 'lr_init' not in config.keys():
+        config['lr_init'] = 0.001
+    if estimator_type == 'NN':
+        model = models.NN(**config)
+    elif estimator_type == 'VAE':
+        model = models.VAE(**config)
+    elif estimator_type == 'LSTM':
+        model = models.LSTM(**config)
+    elif estimator_type == 'CNN':
+        model = models.CNN(**config)
+    return model, optim.Adam(model.parameters(), lr=config['lr_init'])
+
+def get_model_params(estimator_type:str, config: dict):
+    model, opt =   get_model(estimator_type, config)
     return model.params
 
-class Trainer(BaseEstimator, RegressorMixin):
+class Trainer():
     def __init__(self, **kwargs):
-        self.config = {}
+        self.config = kwargs.copy()
         self.device = 'cpu'
-        self.estimator_type = 'NN'
-        if 'estimator_type' in kwargs.keys():
-            self.estimator_type = kwargs['estimator_type']
-        self.config['estimator_type'] = self.estimator_type
-        self.estimator_params = get_model_params({'estimator_type':self.estimator_type})
-        self.epochs = 100
-        self.batch_size = 100
-        self.lr_init = 0.001
-        self.metric = r2_score
-        self.optimizer = optim.Adam
-        self.lr_gamma = 0.1
-        self.scheduler = LR_scheduler
-        self.is_VAE = False
-        self.n_inputs = 10
-        self.n_outputs = 1
-        self.binary_dim = 0
-        self.reg_factor = 0.0
-        self.beta = 1.0
-        self.gamma = 1.0
-        self.binary_dim_y = 0
-        self.verbose = 0
-        self.estimator_param_keys = list(self.estimator_params.keys())
-        self.training_params_keys = ['epochs', 'batch_size', 'lr_init', 'metric', 'optimizer', 'lr_gamma', 'scheduler', 'device', 'is_VAE', 'binary_dim', 'reg_factor', 'beta', 'gamma']
-        self.estimator_params = {key: val for key, val in locals().items() if key in self.estimator_param_keys}
-        self.training_params = {key: val for key, val in locals().items() if key in self.training_params_keys}
-        
-        
+        self.estimator_type = self.config.pop('estimator_type', 'NN')
+        if 'estimator_type' is None:
+            self.estimator_type = 'NN'
+        self.estimator_params = get_model_params(self.estimator_type, self.config)
+        self.training_params = {
+            'epochs': 100,
+            'batch_size': 100,
+            'lr_init': 0.001,
+            'metric': r2_score,
+            'lr_gamma': 0.1,
+            'scheduler': LR_scheduler,
+            'device': 'cpu',
+            'is_VAE': False,
+            'n_inputs': 10,
+            'n_outputs': 1,
+            'binary_dim': 0,
+            'reg_factor': 0.0,
+            'beta': 0,
+            'gamma': 0,
+            'binary_dim_y': 0,
+            'verbose': 0
+        }
+        self.optimizer_keys = ['lr_init','weight_decay']
+        self.training_param_keys = list(self.training_params.keys())
+        self.estimator_params.update({k: v for k, v in self.config.items() if k in self.estimator_params})
+        # first apply the default training params
+        self.training_params.update({k: v for k, v in self.config.items() if k in self.training_params})
+        # now update training_params wit config
+        self.training_params.update({k: v for k, v in self.config.items() if k in self.training_params})
+        # now update config with training_params
         self.config.update(self.training_params)
         self.config.update(self.estimator_params)
-        self.__dict__.update(self.config)
-        for key in self.config:
-            setattr(self, key, self.config[key])
-        for att, value in kwargs.items():
-            self.config[att] = value
-        for att in kwargs:
-            setattr(self, att, kwargs[att])
-        for att, value in locals().items():
-            if '__' or 'self' not in att:
-                self.config.update({att:value})
-        for att, value in self.config.items():
-            setattr(self, att, value)
-        self.config.update(kwargs)
-        self.kwargs.update(self.config)
-        self.config = {key: val for key, val in self.config.items() if '__' not in key or 'self' not in key}
-        # set the
+        self.optimizer_params = {k: v for k, v in self.config.items() if k in self.optimizer_keys}
         
-        
-        # set all the conditionals and save values to the class
-        ####################################################################
+        # update the class attributes with the config
+        for key, value in self.config.items():
+            setattr(self, key, value)
+
         self.loss_terms = []
         
         if self.is_VAE:
@@ -502,93 +497,38 @@ class Trainer(BaseEstimator, RegressorMixin):
             
         if self.reg_factor > 0:
             self.regression_loss = Regression_loss(self.reg_factor)
+            self.regression_loss = self.regression_loss.to(self.device)
             self.loss_terms.append(self.regression_loss)
         
         if self.beta > 0:
             self.L1_reg = L1_regularization(self.beta)
+            self.L1_reg = self.L1_reg.to(self.device)
             self.loss_terms.append(self.L1_reg)
-        
         
         if self.gamma > 0:
             self.L2_reg = L2_regularization(self.gamma)
+            self.L2_reg = self.L2_reg.to(self.device)
             self.loss_terms.append(self.L2_reg)
             
-        # initialize the losses
         self.losses = []
         self.train_losses = []
         self.test_losses = []
         self.train_scores = []
         self.test_scores = []
-        if 'self' in self.config.keys():
-            self.config.pop('self')
-        self.estimator, self.optimizer = get_model(self.config)
-        self.estimator = self.estimator
-        self.estimator_params = self.estimator.params
-        self.kwargs = kwargs
+
+        self.estimator, self.optimizer = get_model(self.estimator_type, self.config)
         if self.scheduler == True:
-            self.milestones = [self.epochs//2, self.epochs//4*3]
+            self.milestones = [self.epochs // 2, self.epochs // 4 * 3]
             self.scheduler = LR_scheduler(self.optimizer, milestones=self.milestones, gamma=self.lr_gamma)
-        ####################################################################
 
+        self.estimator = self.estimator.to(self.device)
+        self.loss_func = self.loss_func.to(self.device)
+        self.optimizer_params = {k: v for k, v in self.config.items() if k in self.optimizer_keys}
+        self.optimizer_class = torch.optim.Adam
+        # change 'lr_init' to 'lr' for the optimizer
+        self.optimizer_params['lr'] = self.optimizer_params.pop('lr_init')
+        self.optimizer = self.optimizer_class(self.estimator.parameters(), **self.optimizer_params)
         
-    def train(self):
-        self.losses = torch.tensor([]).to(self.device)
-        for epoch in range(self.epochs):
-            train_loss = self.train_epoch(epoch)
-
-    def train_epoch(self, epoch):
-        train_loss = 0
-        start = time.time()
-        for batch_idx, data in enumerate(self.dataloader):
-            y = data[1].to(self.device)
-            data = data[0].to(self.device)
-            batch_idx = np.arange(batch_idx * self.batch_size, (batch_idx + 1) * self.batch_size)
-            if batch_idx[-1] > data[0].shape[0]:
-                batch_idx = np.arange(batch_idx[0], data[0].shape[0])
-            if self.is_VAE == True:
-                recon_batch, mu, logvar = self.estimator(data)
-                loss = self.loss_func(recon_batch, data, mu, logvar) # type: ignore
-            else:
-                recon_batch = self.estimator(data)
-                loss = self.loss_func(recon_batch, data) # type: ignore
-            loss += self.compute_additional_losses(data, batch_idx, y= y if self.reg_factor > 0 else None)
-            loss = loss / len(data)
-            self.optimizer.zero_grad() # type: ignore
-            loss.backward()
-            train_loss += loss.item()
-            self.optimizer.step() # type: ignore
-        # if self.scheduler is not None:
-        # #     print(epoch, self.scheduler.milestones)
-        #     self.scheduler.step(epoch) #type: ignore
-        end = time.time()
-
-        if epoch % 10 == 0 and self.verbose != 0:
-            # print the time and the components of the loss
-            print('====> Epoch: {} Average loss: {:.9f} Time: {:.2f}'.format(epoch, train_loss, end - start))
-            print('Loss components: ', # print last value of all the dicts
-                    {k: v[-1] for k, v in self._get_losses().items()})
-        self.losses = torch.cat((self.losses, torch.tensor([train_loss]).to(self.device))) # type: ignore
-        return 
-
-    def compute_additional_losses(self, data, batch_idx, y=None):
-        
-        total_loss = 0
-        # L1 regularization (Lasso)
-        if self.beta > 0:
-            L1_loss = self.L1_reg(self.estimator)
-            total_loss += L1_loss
-            
-        # L2 regularization (Ridge)
-        if self.gamma > 0:
-            L2_loss = self.L2_reg(self.estimator)
-            total_loss += L2_loss
-        
-        # VAE regression loss
-        if y is not None and self.reg_factor > 0:
-            z = self.estimator.encode(data)[0]
-            regression_loss = self.regression_loss(z, y[batch_idx])
-            total_loss += regression_loss
-        return total_loss
         
     def fit(self, x, y):
         self.n_inputs = x.shape[1]
@@ -597,74 +537,102 @@ class Trainer(BaseEstimator, RegressorMixin):
         self.config['input_dim'] = self.n_inputs
         self.config['output_dim'] = self.n_outputs
         self.config['train_observations'] = self.train_observations
-        # self.config['y'] = self.y
-        # self.config['x'] = self.x
-        if 'self' in self.config.keys():
-            self.config.pop('self')
+
         if x is None or y is None:
             raise ValueError("x and/or y is None")
         else:
-            if type(x) == np.ndarray:
+            if isinstance(x, np.ndarray):
                 x = torch.from_numpy(x).float().to(self.device)
-            if type(y) == np.ndarray:
+            if isinstance(y, np.ndarray):
                 y = torch.from_numpy(y).float().to(self.device)
-            self.dataloader = DataLoader(TensorDataset(x, y), batch_size=self.batch_size, shuffle=True)
-            if self.estimator is None or self.config is None:
-                self.estimator, self.optimizer = get_model(self.config)
-                self.estimator = self.estimator.to(self.device)
-                self.estimator.update_params(self.config)
-                self.estimator = self.estimator.to(self.device)
-                self.estimator_params = self.estimator.params
-                self.config.update(self.estimator_params)
-            self.estimator_params = {k:v for k, v in self.config.items() if k in self.estimator_params}
-            self.train()
+
+        self.estimator, self.optimizer = get_model(self.estimator_type, self.config)
+        self.estimator = self.estimator.to(self.device)
+        self.estimator.update_params(self.config)
+        self.estimator = self.estimator.to(self.device)
+        self.estimator_params = self.estimator.params
+        self.config.update(self.estimator_params)
+        self.dataloader = DataLoader(TensorDataset(x, y), batch_size=self.batch_size, shuffle=True)
+        self = train(self)
         return self
+
     
     def predict(self, x):
+        # make sure x is a torch tensor, if not convert it and send it to the device
+        if type(x) == np.ndarray:
+            x = torch.from_numpy(x).float().to(self.device)
+        else:
+            x = x.to(self.device)
         if self.is_VAE == True:
             return self.estimator(x)[0].detach().cpu()
         else:
             return self.estimator(x).detach().cpu()
-    
+
     def score(self, x, y, metric=None):
-        # mae of x and y
-        # make sure x and y are torch tensors
+        if metric is None:
+            metric = self.metric
+
+        if not callable(metric):
+            raise ValueError("metric must be a callable function or a valid sklearn metric string")
+
+        if isinstance(x, (np.ndarray, pd.DataFrame)):
+            x = torch.from_numpy(x.astype('float32')).to('cpu')
+        elif isinstance(x, torch.Tensor):
+            x = x.float().to('cpu')
+        else:
+            raise TypeError("x must be a numpy array, pandas DataFrame, or torch tensor")
+
+        if isinstance(y, np.ndarray):
+            y = torch.from_numpy(y).to('cpu')
+        elif isinstance(y, torch.Tensor):
+            y = y.to('cpu')
+        else:
+            raise TypeError("y must be a numpy array or torch tensor")
+
         if x.shape[1] != self.n_inputs:
-            # warning that the model is being generated because it has not been fit
-            raise ValueError("x has the wrong number of features")
-        if y.shape[1] != self.n_outputs:
-            raise ValueError("y has the wrong number of features")
-        if type(x) == np.ndarray:
-            x = torch.tensor(x, dtype=torch.float32).to(self.device)
-        else:
-            x = x.to(self.device)
-        pred = self.predict(x)
-        if type(y) == np.ndarray:
-            pass
-        else:
-            y = y.detach().cpu().numpy()
-        return self.metric(y, pred)
-    
-        # get loss curves
+            raise ValueError(f"x should have {self.n_inputs} features, but got {x.shape[1]} features")
+
+        
+        # Bring y and pred back to cpu for scoring as metric might not be GPU compatible
+        y = y.cpu().numpy()
+        pred = self.predict(x).detach().cpu().numpy()
+
+
+        score = metric(y, pred)
+        if isinstance(score, np.ndarray):
+            score = np.mean(score)
+
+        return score
+
+ 
     def _get_losses(self):
         # create a dictionary of all the components of the loss
         #losses = {'vae_loss': self.vae_loss.reg_loss, 'regression_loss': self.regression_loss.reg_loss, 'L1_loss': self.L1_reg.reg_loss, 'L2_loss': self.L2_reg.reg_loss}
         # get the loss attributes from the loss classes
         losses = {}
-        for att in self.__dict__:
-            if att.endswith('loss') or att.endswith('reg'):
-                    # check if the attribute is a list with more than one element
-                    if len(self.__dict__[att].reg_loss) > 0:
-                        losses[att] = torch.concat([torch.tensor(self.__dict__[att].reg_loss)]).detach().cpu().numpy()
-                    
-        # for att in losses.keys():
-        #     if len(losses[att]) > 1:
-        #         print(att, losses[att])
-        #         losses[att] = torch.concat(losses[att]).detach().cpu().numpy()
+        for att in self.loss_terms:
+            losses[att.__class__.__name__] = att.reg_loss
+        # for att in self.__dict__:
+        #     if att.endswith('loss') or att.endswith('reg'):
+        #             # check if the attribute is a list with more than one element
+        #             if len(self.__dict__[att].reg_loss) > 0 and [att] != 'loss':
+        #                 losses[att] = torch.concat([torch.tensor(self.__dict__[att].reg_loss)]).detach().cpu().numpy()
+         
         return losses
     
+    # def get_params(self, deep=True):
+    #     return self.config
+    @classmethod
+    def _get_param_names(cls):
+        return list(cls.estimator_params.keys()) + list(cls.training_params.keys())
+
     def get_params(self, deep=True):
-        return self.config
+        params = {}
+        for attr, value in self.__dict__.items():
+            if attr in self.estimator_params or attr in self.training_params:
+                params[attr] = value
+        return params
+
     
     def get_estimator_params(self):
         estimator_params = self.estimator.params
@@ -736,3 +704,61 @@ class custom_loss(nn.MSELoss):
         mse_loss = F.mse_loss(y, y_pred)
         total_loss = mse_loss + extra_loss
         return total_loss
+    
+def train(self):
+    self.losses = torch.tensor([]).to(self.device)
+    for epoch in range(self.epochs):
+        train_loss = train_epoch(self, epoch)
+    return self
+
+def train_epoch(self, epoch):
+    train_loss = 0
+    start = time.time()
+    for batch_idx, data in enumerate(self.dataloader):
+        y = data[1].to(self.device)
+        data = data[0].to(self.device)
+        batch_idx = np.arange(batch_idx * self.batch_size, (batch_idx + 1) * self.batch_size)
+        batch_idx = torch.from_numpy(batch_idx).to(self.device)
+        if batch_idx[-1] > data[0].shape[0]:
+            batch_idx = batch_idx[:data[0].shape[0]]
+        if self.is_VAE == True:
+            recon_batch, mu, logvar = self.estimator(data)
+            loss = self.loss_func(recon_batch, data, mu, logvar) # type: ignore
+        else:
+            recon_batch = self.estimator(data)
+            loss = self.loss_func(recon_batch, y) # type: ignore
+        loss += compute_additional_losses(self, data, batch_idx, y= y if self.reg_factor > 0 else None)
+        loss = loss / len(data)
+        self.optimizer.zero_grad() # type: ignore
+        loss.backward()
+        train_loss += loss.item()
+        self.optimizer.step() # type: ignore
+    end = time.time()
+    if self.verbose != 0:
+        if epoch % self.verbose == 0 :
+            # print the time and the components of the loss
+            print('====> Epoch: {} Average loss: {:.9f} Time: {:.2f}'.format(epoch, train_loss, end - start))
+            print('Loss components: ', # print last value of all the dicts
+                    {k: v[-1] for k, v in self._get_losses().items()})
+    self.losses = torch.cat((self.losses, torch.tensor([train_loss]).to(self.device))) # type: ignore
+    return self.losses
+
+def compute_additional_losses(self, data, batch_idx, y=None):
+    
+    total_loss = 0
+    # L1 regularization (Lasso)
+    if self.beta > 0:
+        L1_loss = self.L1_reg(self.estimator)
+        total_loss += L1_loss
+        
+    # L2 regularization (Ridge)
+    if self.gamma > 0:
+        L2_loss = self.L2_reg(self.estimator)
+        total_loss += L2_loss
+    
+    # VAE regression loss
+    if y is not None and self.reg_factor > 0:
+        z = self.estimator.encode(data)[0]
+        regression_loss = self.regression_loss(z, y[batch_idx])
+        total_loss += regression_loss
+    return total_loss
