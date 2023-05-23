@@ -180,6 +180,20 @@ class CNN(BaseEstimator, nn.Module):
         self.conv_layers = conv_layers
         self.conv_channels = [1] + list(out_channels)
         self.cs = ModuleList([nn.Conv1d(self.conv_channels[i], self.conv_channels[i+1], self.kernel_size) for i in range(len(out_channels)-1)])
+        # get the dimension of the last cs layer
+        self.stride = 1
+        # calculate the output size of conv layers
+        self.input_fc_size = self.n_inputs
+        for i in range(self.conv_layers):
+            self.input_fc_size = ((self.input_fc_size - self.kernel_size + 2*self.conv_padding) / self.stride) + 1
+
+        # reduce size by factor of kernel size after average pooling in each conv layer
+        self.input_fc_size = self.input_fc_size // self.kernel_size**self.conv_layers
+
+        self.input_fc_size *= self.conv_channels[-1]  # multiply by the number of last conv layer channels
+
+        self.input_fc_size = int(self.input_fc_size)
+
         self.fc1 = nn.Linear(138, self.fc_size)
         self.fcs = ModuleList([nn.Linear(self.fc_size, self.fc_size) for i in range(fc_layers-1)])
         self.fout = nn.Linear(self.fc_size, n_outputs)
@@ -209,15 +223,15 @@ class CNN(BaseEstimator, nn.Module):
             # pool average
             x = F.avg_pool1d(x, self.kernel_size)
         x = x.flatten().reshape(rows, -1)
-        
+        cols = x.shape[1]
         try:
             x = F.relu(self.fc1(x))
         except:
             try:
-                self.fc1 = nn.Linear(x.shape[1], self.fc_size)
+                self.fc1 = nn.Linear(cols, self.fc_size)
                 x = F.relu(self.fc1(x))
             except:
-                self.fc1 = nn.Linear(x.shape[1], self.fc_size).to('cuda')
+                self.fc1 = nn.Linear(cols, self.fc_size).to('cuda')
                 x = F.relu(self.fc1(x))
         for fc in self.fcs:
             x = F.relu(fc(x))
