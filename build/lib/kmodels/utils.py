@@ -24,6 +24,7 @@ import time
 import torch
 from torch.utils.data import TensorDataset, DataLoader
 import time
+import gc
 
 # lets get the MultiLRstep from torch to schedule the learning rate
 from torch.optim.lr_scheduler import MultiStepLR
@@ -418,10 +419,8 @@ class Trainer():
         self.config = kwargs.copy()
         self.device = 'cpu'
         self.estimator_type = self.config.pop('estimator_type', 'NN')
-        print(self.estimator_type)
         if 'estimator_type' == None:
             self.estimator_type = 'NN'
-        print(self.config)
         self.estimator_params = get_model_params(estimator_type = self.estimator_type, config=self.config)
         self.training_params = {
             'epochs': 100,
@@ -517,16 +516,41 @@ class Trainer():
         return self
 
     
+    # def predict(self, x):
+    #     # make sure x is a torch tensor, if not convert it and send it to the device
+    #     if type(x) == np.ndarray:
+    #         x = torch.from_numpy(x).float().to(self.device)
+    #     else:
+    #         x = x.to(self.device)
+    #     if self.is_VAE == True:
+    #         return self.estimator(x)[0].detach().cpu()
+    #     else:
+    #         return self.estimator(x).detach().cpu()
+        
+    # rewrite the predict functino to use a dataloader to batch the data
     def predict(self, x):
         # make sure x is a torch tensor, if not convert it and send it to the device
         if type(x) == np.ndarray:
             x = torch.from_numpy(x).float().to(self.device)
         else:
-            x = x.to(self.device)
-        if self.is_VAE == True:
-            return self.estimator(x)[0].detach().cpu()
-        else:
-            return self.estimator(x).detach().cpu()
+            x = x
+        # create a dataloader
+        dataloader = DataLoader(TensorDataset(x), batch_size=self.batch_size, shuffle=False)
+        # make a list to store the predictions
+        predictions = []
+        # loop through the dataloader
+        # for data in dataloader:
+        #     # get the data
+        #     data = data[0].to(self.device)
+        #     # predict
+        #     pred = self.predict(data)
+        #     # append the predictions to the list
+        #     predictions.append(pred)
+        # vectorize the above
+        predictions = [self.predict(data[0].to(self.device)) for data in dataloader]
+        # concatenate the predictions
+        predictions = torch.cat(predictions, dim=0)
+        return predictions
 
     def score(self, x, y, metric=None):
         if metric is None:
@@ -628,7 +652,8 @@ class Trainer():
             self.train_loss = loss.item()
             loss.backward()
             self.optimizer.step()
-        
+            torch.cuda.empty_cache()
+            gc.collect()
         end = time.time()
         
         if self.verbose != 0 and epoch % self.verbose == 0:
@@ -668,8 +693,8 @@ class Trainer():
             recon_batch = self.estimator(data)
             loss = self.loss_func(recon_batch, y)
             loss += compute_additional_losses(self, data, y)
-        print(data, recon_batch)
         return loss
+
     
 class custom_loss(nn.MSELoss):
     def __init__(self, config : dict):
