@@ -324,7 +324,7 @@ class LSTM(nn.Module):
 class VAE(nn.Module):
     # make all the inputs here have default so that we can use kwargs   
     #def __init__(self, input_dim, hidden_dim, latent_dim, n_layers, formula_dim):
-    def __init__(self, input_dim=106, hidden_dim=75, latent_dim=50, n_layers=3, binary_dim=3):
+    def __init__(self, input_dim=106, hidden_dim=75, latent_dim=50, n_layers=3, binary_dim=3, **kwargs):
         super(VAE, self).__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
@@ -333,6 +333,12 @@ class VAE(nn.Module):
         self.binary_dim = binary_dim
         self.encoder_layers = n_layers  
         self.decoder_layers = n_layers
+        # update with kwargs
+        for key in kwargs:
+            if hasattr(self, key):
+                setattr(self, key, kwargs[key])
+        # update params
+        self.params = {}
         # encoder with n_layers
         self.fc1 = nn.Linear(self.input_dim, self.hidden_dim)
         self.encoder_layers = nn.ModuleList([nn.Linear(self.hidden_dim, self.hidden_dim) for i in range(self.n_layers)])
@@ -353,14 +359,6 @@ class VAE(nn.Module):
             self.decoder_layers,
             self.out3
         )
-        self.params = {}
-        kwargs = locals()
-        for key in kwargs:
-            self.params[key] = kwargs[key]
-        try:
-            self.params.pop('self')
-        except:
-            pass
         return 
     
     def encode(self, x):
@@ -399,7 +397,8 @@ class VAE(nn.Module):
             hidden_dim=self.hidden_dim,
             latent_dim=self.latent_dim,
             n_layers=self.n_layers,
-            binary_dim=self.binary_dim
+            binary_dim=self.binary_dim,
+            **self.kwargs
         )
         
         return self

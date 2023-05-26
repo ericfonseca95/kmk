@@ -300,20 +300,44 @@ class LR_scheduler():
         self.optimizer.step()
         self.optimizer.zero_grad()
     
-class VAE_loss():
+# class VAE_loss(nn.Module):
+#     def __init__(self, binary_dim):
+#         self.binary_dim = binary_dim
+#         self.reg_loss = torch.tensor([])
+#     def __call__(self, recon_x, x, mu, logvar):
+#         binary_loss = F.binary_cross_entropy(recon_x[:, :self.binary_dim], x[:, :self.binary_dim], reduction='sum')
+#         scaler_loss = F.mse_loss(recon_x[:, self.binary_dim:], x[:, self.binary_dim:], reduction='sum')
+#         # put binary_loss on the same scale as scaler_loss
+#         binary_loss = binary_loss * scaler_loss
+#         total_loss = binary_loss + scaler_loss
+#         BCE = torch.mean(total_loss)
+#         KLD = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+#         self.reg_loss.append(BCE + KLD)
+#         return BCE + KLD
+#     def to(self, device):
+#         self.reg_loss = [i.to(device) for i in self.reg_loss]
+#         return self
+class VAE_loss(nn.Module):
     def __init__(self, binary_dim):
+        super(VAE_loss, self).__init__()
         self.binary_dim = binary_dim
         self.reg_loss = []
-    def __call__(self, recon_x, x, mu, logvar):
+
+    def forward(self, recon_x, x, mu, logvar):
         binary_loss = F.binary_cross_entropy(recon_x[:, :self.binary_dim], x[:, :self.binary_dim], reduction='sum')
         scaler_loss = F.mse_loss(recon_x[:, self.binary_dim:], x[:, self.binary_dim:], reduction='sum')
-        # put binary_loss on the same scale as scaler_loss
-        binary_loss = binary_loss * scaler_loss
         total_loss = binary_loss + scaler_loss
         BCE = torch.mean(total_loss)
         KLD = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
         self.reg_loss.append(BCE + KLD)
         return BCE + KLD
+
+    def to(self, device):
+        self.device = device
+        self.reg_loss = [i.to(device) for i in self.reg_loss]
+        return self
+
+
 
 class Regression_loss(nn.Module):
     def __init__(self, reg_factor):
