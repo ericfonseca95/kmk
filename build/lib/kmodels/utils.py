@@ -324,6 +324,7 @@ class VAE_loss(nn.Module):
         self.reg_loss = []
 
     def forward(self, recon_x, x, mu, logvar):
+        print(recon_x.shape, x.shape)
         binary_loss = F.binary_cross_entropy(recon_x[:, :self.binary_dim], x[:, :self.binary_dim], reduction='sum')
         scaler_loss = F.mse_loss(recon_x[:, self.binary_dim:], x[:, self.binary_dim:], reduction='sum')
         total_loss = binary_loss + scaler_loss
@@ -355,6 +356,8 @@ class Regression_loss(nn.Module):
         self.reg = None
     def __iter__(self):
         return iter(self.reg_loss)
+    def forward(self, z, y):
+        return self.__call__(z, y)
     
 class L2_regularization(nn.Module):
     def __init__(self, gamma):
@@ -365,6 +368,8 @@ class L2_regularization(nn.Module):
         for param in model.parameters():
             self.reg_loss.append(0.5 * self.gamma * torch.sum(torch.pow(param, 2)))
         return self.reg_loss[-1]
+    def forward(self, model):
+        return self.__call__(model)
 
 class L1_regularization(nn.Module):
     def __init__(self, beta):
@@ -377,6 +382,8 @@ class L1_regularization(nn.Module):
         return self.reg_loss[-1]
     def __iter__(self):
         return iter(self.reg_loss)
+    def forward(self, model):
+        return self.__call__(model)
     
 
 class MSE_Loss(nn.Module):
@@ -397,6 +404,8 @@ class MSE_Loss(nn.Module):
             return self.total_loss
         else:
             return self.mse(x, y)
+    def forward(self, x, y):
+        return self.__call__(x, y)
 
     
 # lets write a general training class that will work for all of our models. We also want this to 
