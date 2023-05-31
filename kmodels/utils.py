@@ -324,7 +324,6 @@ class VAE_loss(nn.Module):
         self.reg_loss = []
 
     def forward(self, recon_x, x, mu, logvar):
-        print(recon_x.shape, x.shape)
         binary_loss = F.binary_cross_entropy(recon_x[:, :self.binary_dim], x[:, :self.binary_dim], reduction='sum')
         scaler_loss = F.mse_loss(recon_x[:, self.binary_dim:], x[:, self.binary_dim:], reduction='sum')
         total_loss = binary_loss + scaler_loss
@@ -423,6 +422,8 @@ def get_model(estimator_type: str, config: dict):
         model = models.LSTM(**config)
     elif estimator_type == 'CNN':
         model = models.CNN(**config)
+    elif estimator_type == 'Hierarch_VAE':
+        model = models.Hierarch_VAE(**config)
     else:
         raise ValueError(f"Invalid estimator_type: {estimator_type}")
 
@@ -442,6 +443,8 @@ def get_model_params(estimator_type: str, config: dict):
         model = models.LSTM(**config)
     elif estimator_type == 'CNN':
         model = models.CNN(**config)
+    elif estimator_type == 'Hierarch_VAE':
+        model = models.Hierarch_VAE(**config)
     else:
         raise ValueError(f"Invalid estimator_type: {estimator_type}")
 

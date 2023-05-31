@@ -404,37 +404,39 @@ class VAE(nn.Module):
         return self
     
 # create an identical VAE class but make it heirarchical
-class Hierach_VAE(nn.Module):
-    def __init__(self, input_dim, latent_dim, n_layers):
-        super(Hierach_VAE, self).__init__()
+class Hierarch_VAE(nn.Module):
+    def __init__(self, input_dim=100, latent_dim=2, n_layers=2, binary_dim=0, **kwargs):
+        super(Hierarch_VAE, self).__init__()
         self.input_dim = input_dim
         self.latent_dim = latent_dim
         self.n_layers = n_layers
+        for key in kwargs:
+            if hasattr(self, key):
+                setattr(self, key, kwargs[key])
+        
         self.layer_topologies = get_topology(self.input_dim, self.n_layers, self.latent_dim)
         self.fc1 = nn.Linear(self.input_dim, self.layer_topologies[0]) 
-        for i in range(self.n_layers):
+        for i in range(self.n_layers+1):
             setattr(self, 'encoder_layer_{}'.format(i), nn.Linear(self.layer_topologies[i], self.layer_topologies[i+1]))
         self.out1 = nn.Linear(self.layer_topologies[-1], self.latent_dim)
         self.out2 = nn.Linear(self.layer_topologies[-1], self.latent_dim)
         self.encoder_layers = [getattr(self, 'encoder_layer_{}'.format(i)) for i in range(self.n_layers)]
         self.fc3 = nn.Linear(self.latent_dim, self.layer_topologies[-1])
-        for i in range(self.n_layers):
+        for i in range(self.n_layers+1):
             setattr(self, 'decoder_layer_{}'.format(i), nn.Linear(self.layer_topologies[-i-1], self.layer_topologies[-i-2]))
         self.out3 = nn.Linear(self.layer_topologies[0], self.input_dim) 
         self.decoder_layers = [getattr(self, 'decoder_layer_{}'.format(i)) for i in range(self.n_layers)]
         self.params = {}
-        kwargs = locals()
-        for key in kwargs:
-            self.params[key] = kwargs[key]
-        self.params.pop('self')
-        
+
+    
     def encode(self, x):
         x = F.relu(self.fc1(x))
         for layer in self.encoder_layers:
             x = F.relu(layer(x))
         return self.out1(x), self.out2(x)
-    # we need to change the reparameterization function to use a bernoulli distribution for the latent space   
+    
     def reparameterize(self, mu, logvar):
+        # use a bernoulli distribution to sample from the latent space 
         std = torch.exp(0.5*logvar)
         eps = torch.randn_like(std)
         return mu + eps*std
@@ -443,7 +445,9 @@ class Hierach_VAE(nn.Module):
         z = F.relu(self.fc3(z))
         for layer in self.decoder_layers:
             z = F.relu(layer(z))
-        return F.relu(self.out3(z))
+        out = self.out3(z)
+        out[:, :self.binary_dim] = F.softmax(out[:, :self.binary_dim], dim=1)
+        return out
     
     def forward(self, x):
         mu, logvar = self.encode(x.view(-1, self.input_dim))
@@ -459,7 +463,26 @@ class Hierach_VAE(nn.Module):
         self.__init__(
             input_dim=self.input_dim,
             latent_dim=self.latent_dim,
-            n_layers=self.n_layers
+            n_layers=self.n_layers,
+            binary_dim=self.binary_dim,
+            **self.kwargs
         )
         
         return self
+    
+# this function will return a list of layer topologies for a given number of layers to create a 
+# hierachical VAE
+def get_topology(input_dim, layers, latent_dim):
+    # the first layer will be the input dim, then it should taper down to the latent dim
+    # the last layer should be the latent dim
+    
+    layer_topologies = [input_dim]
+    
+    # layers should step be dx = (input_dim - latent_dim) / (layers + 1)
+    dx = (input_dim - latent_dim) / (layers + 1)
+    for i in range(layers):
+        layer_topologies.append(int(input_dim - dx*(i+1)))
+    layer_topologies.append(latent_dim)
+    return layer_topologies
+    
+    
