@@ -300,42 +300,33 @@ class LR_scheduler():
         self.optimizer.step()
         self.optimizer.zero_grad()
     
-# class VAE_loss(nn.Module):
-#     def __init__(self, binary_dim):
-#         self.binary_dim = binary_dim
-#         self.reg_loss = torch.tensor([])
-#     def __call__(self, recon_x, x, mu, logvar):
-#         binary_loss = F.binary_cross_entropy(recon_x[:, :self.binary_dim], x[:, :self.binary_dim], reduction='sum')
-#         scaler_loss = F.mse_loss(recon_x[:, self.binary_dim:], x[:, self.binary_dim:], reduction='sum')
-#         # put binary_loss on the same scale as scaler_loss
-#         binary_loss = binary_loss * scaler_loss
-#         total_loss = binary_loss + scaler_loss
-#         BCE = torch.mean(total_loss)
-#         KLD = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
-#         self.reg_loss.append(BCE + KLD)
-#         return BCE + KLD
-#     def to(self, device):
-#         self.reg_loss = [i.to(device) for i in self.reg_loss]
-#         return self
+
 class VAE_loss(nn.Module):
     def __init__(self, binary_dim):
         super(VAE_loss, self).__init__()
         self.binary_dim = binary_dim
-        self.reg_loss = []
+        self.reg_loss = torch.tensor([])  # initialize as an empty tensor
 
     def forward(self, recon_x, x, mu, logvar):
-        binary_loss = F.binary_cross_entropy(recon_x[:, :self.binary_dim], x[:, :self.binary_dim], reduction='sum')
-        scaler_loss = F.mse_loss(recon_x[:, self.binary_dim:], x[:, self.binary_dim:], reduction='sum')
+        if self.binary_dim > 0:
+            binary_loss = F.binary_cross_entropy(recon_x[:, :self.binary_dim], x[:, :self.binary_dim], reduction='sum')
+            scaler_loss = F.mse_loss(recon_x[:, self.binary_dim:], x[:, self.binary_dim:], reduction='sum')
+        else:
+            binary_loss = 0
+            scaler_loss = F.mse_loss(recon_x, x, reduction='sum')
+        
         total_loss = binary_loss + scaler_loss
         BCE = torch.mean(total_loss)
         KLD = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
-        self.reg_loss.append(BCE + KLD)
-        return BCE + KLD
+        loss = BCE + KLD
+        self.reg_loss = torch.cat((self.reg_loss, torch.tensor([loss.item()]).to(self.reg_loss.device)))  # add new loss to the tensor
+        return loss
 
     def to(self, device):
         self.device = device
-        self.reg_loss = [i.to(device) for i in self.reg_loss]
+        self.reg_loss = self.reg_loss.to(device)  # move tensor to device
         return self
+
 
 
 
@@ -498,7 +489,8 @@ class Trainer():
             self.loss_func = VAE_loss(self.binary_dim)
         else:
             self.loss_func = MSE_Loss(self.binary_dim_y)
-            
+        self.loss_terms.append(self.loss_func)
+        
         if self.reg_factor > 0:
             self.regression_loss = Regression_loss(self.reg_factor)
             self.regression_loss = self.regression_loss.to(self.device)
@@ -550,18 +542,6 @@ class Trainer():
         self.dataloader = DataLoader(TensorDataset(x, y), batch_size=self.batch_size, shuffle=True)
         self.train()
         return self
-
-    
-    # def predict(self, x):
-    #     # make sure x is a torch tensor, if not convert it and send it to the device
-    #     if type(x) == np.ndarray:
-    #         x = torch.from_numpy(x).float().to(self.device)
-    #     else:
-    #         x = x.to(self.device)
-    #     if self.is_VAE == True:
-    #         return self.estimator(x)[0].detach().cpu()
-    #     else:
-    #         return self.estimator(x).detach().cpu()
         
     # rewrite the predict functino to use a dataloader to batch the data
     def predict(self, x):
@@ -574,19 +554,15 @@ class Trainer():
         dataloader = DataLoader(TensorDataset(x), batch_size=self.batch_size, shuffle=False)
         # make a list to store the predictions
         predictions = []
-        # loop through the dataloader
-        # for data in dataloader:
-        #     # get the data
-        #     data = data[0].to(self.device)
-        #     # predict
-        #     pred = self.predict(data)
-        #     # append the predictions to the list
-        #     predictions.append(pred)
-        # vectorize the above
-        predictions = [self.predict(data[0].to(self.device)) for data in dataloader]
+        predictions = [self.estimator(batch[0]) for batch in dataloader]  # extract the tensor from the batch
         # concatenate the predictions
-        predictions = torch.cat(predictions, dim=0)
+        # check if VAE, if so take the first element of the tuple
+        if self.is_VAE:
+            predictions = torch.cat([i[0] for i in predictions], dim=0)
+        else:   
+            predictions = torch.cat(predictions, dim=0)
         return predictions
+
 
     def score(self, x, y, metric=None):
         if metric is None:
@@ -629,8 +605,6 @@ class Trainer():
         losses = {}
         for loss in self.loss_terms:
             losses[loss.__class__.__name__] = loss.reg_loss
-        # for att in self.loss_terms:
-        #     losses[att.__class__.__name__] = att.reg_loss
         return losses
 
     @classmethod
@@ -677,14 +651,14 @@ class Trainer():
         start = time.time()
         for batch_idx, data in enumerate(self.dataloader):
             y = data[1].to(self.device)
-            data = data[0].to(self.device)
+            x = data[0].to(self.device)
             batch_idx = np.arange(batch_idx * self.batch_size, (batch_idx + 1) * self.batch_size)
             batch_idx = torch.from_numpy(batch_idx).to(self.device)
-            if batch_idx[-1] > data[0].shape[0]:
-                batch_idx = batch_idx[:data[0].shape[0]]
+            if batch_idx[-1] > x[0].shape[0]:
+                batch_idx = batch_idx[:x[0].shape[0]]
                 
             self.optimizer.zero_grad()
-            loss = evaluate_loss(self, data, y=y)
+            loss = self.evaluate_loss(x, y)
             self.train_loss = loss.item()
             loss.backward()
             self.optimizer.step()
@@ -695,41 +669,39 @@ class Trainer():
         if self.verbose != 0 and epoch % self.verbose == 0:
             print('====> Epoch: {} Average loss: {:.9f} Time: {:.2f}'.format(epoch, loss, end - start))
             print('Loss components:', {k: v[-1] for k, v in self._get_losses().items()})
-        
-        self.losses = torch.cat((self.losses, torch.tensor([loss]).to(self.device)))
-        return loss.item()
+        return self.train_loss
 
+    def evaluate_loss(self, X, y):
+        if self.is_VAE == True:
+            recon_batch, mu, logvar = self.estimator(X)
+            loss = self.loss_func(recon_batch, y, mu, logvar)
+            loss += self.compute_additional_losses()
+        else:
+            recon_batch = self.estimator(X)
+            loss = self.loss_func(recon_batch, y)
+            loss += self.compute_additional_losses()
+        return loss
 
-    def compute_additional_losses(self, data, y=None):
+    def compute_additional_losses(self):
         
         total_loss = 0
         # L1 selfularization (Lasso)
         if self.beta > 0:
-            L1_loss = self.L1_self(self.estimator)
+            L1_loss = self.L1_reg(self.estimator)
             total_loss += L1_loss
             
         # L2 selfularization (Ridge)
         if self.gamma > 0:
-            L2_loss = self.L2_self(self.estimator)
+            L2_loss = self.L2_reg(self.estimator)
             total_loss += L2_loss
         
         # VAE selfression loss
-        if y is not None and self.self_factor > 0 and self.is_VAE == True:
-            z = self.estimator.encode(data)[0]
-            selfression_loss = self.selfression_loss(z, y)
-            total_loss += selfression_loss
+        #if y is not None and self.reg_factor > 0 and self.is_VAE == True:
+           #  z = self.estimator.encode(X)[0]
+            #self.ression_loss = self.regression_loss(z, z_y) # typos in the original code
+            #total_loss += selfression_loss
         return total_loss
 
-    def evaluate_loss(self, data, y=None):
-        if self.is_VAE:
-            recon_batch, mu, logvar = self.estimator(data)
-            loss = self.loss_func(recon_batch, data, mu, logvar)
-            loss += compute_additional_losses(self, data)
-        else:
-            recon_batch = self.estimator(data)
-            loss = self.loss_func(recon_batch, y)
-            loss += compute_additional_losses(self, data, y)
-        return loss
 
     
 class custom_loss(nn.MSELoss):
@@ -781,68 +753,3 @@ class custom_loss(nn.MSELoss):
         total_loss = mse_loss + extra_loss
         return total_loss
     
-def train(reg):
-    reg.estimator = reg.estimator.to(reg.device)
-    reg.losses = torch.tensor([]).to(reg.device)
-    reg.loss_func = reg.loss_func.to(reg.device)
-    for epoch in range(reg.epochs):
-        train_loss = train_epoch(reg, epoch)
-        reg.losses = torch.cat((reg.losses, torch.tensor([train_loss]).to(reg.device)))
-    return reg
-
-def train_epoch(reg, epoch):
-    start = time.time()
-    for batch_idx, data in enumerate(reg.dataloader):
-        y = data[1].to(reg.device)
-        data = data[0].to(reg.device)
-        batch_idx = np.arange(batch_idx * reg.batch_size, (batch_idx + 1) * reg.batch_size)
-        batch_idx = torch.from_numpy(batch_idx).to(reg.device)
-        if batch_idx[-1] > data[0].shape[0]:
-            batch_idx = batch_idx[:data[0].shape[0]]
-            
-        reg.optimizer.zero_grad()
-        loss = evaluate_loss(reg, data, y=y)
-        reg.train_loss = loss.item()
-        loss.backward()
-        reg.optimizer.step()
-    
-    end = time.time()
-    
-    if reg.verbose != 0 and epoch % reg.verbose == 0:
-        print('====> Epoch: {} Average loss: {:.9f} Time: {:.2f}'.format(epoch, loss, end - start))
-        print('Loss components:', {k: v[-1] for k, v in reg._get_losses().items()})
-    
-    reg.losses = torch.cat((reg.losses, torch.tensor([loss]).to(reg.device)))
-    return loss.item()
-
-
-def compute_additional_losses(reg, data, y=None):
-    
-    total_loss = 0
-    # L1 regularization (Lasso)
-    if reg.beta > 0:
-        L1_loss = reg.L1_reg(reg.estimator)
-        total_loss += L1_loss
-        
-    # L2 regularization (Ridge)
-    if reg.gamma > 0:
-        L2_loss = reg.L2_reg(reg.estimator)
-        total_loss += L2_loss
-    
-    # VAE regression loss
-    if y is not None and reg.reg_factor > 0 and reg.is_VAE == True:
-        z = reg.estimator.encode(data)[0]
-        regression_loss = reg.regression_loss(z, y)
-        total_loss += regression_loss
-    return total_loss
-
-def evaluate_loss(reg, data, y=None):
-    if reg.is_VAE:
-        recon_batch, mu, logvar = reg.estimator(data)
-        loss = reg.loss_func(recon_batch, data, mu, logvar)
-        loss += compute_additional_losses(reg, data)
-    else:
-        recon_batch = reg.estimator(data)
-        loss = reg.loss_func(recon_batch, y)
-        loss += compute_additional_losses(reg, data, y)
-    return loss
