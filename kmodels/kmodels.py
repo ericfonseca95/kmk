@@ -359,12 +359,15 @@ class VAE(nn.Module):
             self.decoder_layers,
             self.out3
         )
+        self.dropout = nn.Dropout(p=0.2)
         return 
     
     def encode(self, x):
+        x = self.dropout(x)
         x = F.relu(self.fc1(x))
         for layer in self.encoder_layers:
             x = F.relu(layer(x))
+        # add the dropout
         return self.out1(x), self.out2(x)
     
     def reparameterize(self, mu, logvar):
@@ -378,7 +381,6 @@ class VAE(nn.Module):
         for layer in self.decoder_layers:
             z = F.relu(layer(z))
         out = self.out3(z)
-        out[:, :self.binary_dim] = F.softmax(out[:, :self.binary_dim], dim=1)
         return out
     
     def forward(self, x):
