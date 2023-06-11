@@ -383,6 +383,7 @@ class MSE_Loss(nn.Module):
         # for the binary variables we want to use binary cross entropy
         self.bce = nn.BCELoss()
         self.mse = nn.MSELoss()
+        self.reg_loss = torch.tensor([])  # initialize as an empty tensor
         
     def __call__(self, x, y):
         if self.binary_dim_y > 0:
@@ -393,7 +394,10 @@ class MSE_Loss(nn.Module):
             self.total_loss = self.binary_loss + self.scaler_loss
             return self.total_loss
         else:
-            return self.mse(x, y)
+            loss = self.mse(x, y)
+            # concat to regloss
+            self.reg_loss = torch.cat((self.reg_loss, torch.tensor([loss.item()]).to(self.reg_loss.device)))  # add new loss to the tensor
+            return loss
     def forward(self, x, y):
         return self.__call__(x, y)
 
