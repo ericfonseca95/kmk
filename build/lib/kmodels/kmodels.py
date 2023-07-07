@@ -85,7 +85,7 @@ def TLLSTM(model, X, change_layers=1):
 
 
 
-class NN(BaseEstimator, nn.Module):
+class NN(nn.Module):
     def __init__(self, n_inputs=106, n_outputs=1, layers=3, layer_size=75, change_layers=0, **kwargs):
         """
         Initialize the NN model with a given number of layers and layer size.
@@ -107,6 +107,10 @@ class NN(BaseEstimator, nn.Module):
             setattr(self, key, kwargs[key])
         self.fc1 = nn.Linear(self.n_inputs, self.layer_size)
         self.fcs = ModuleList([nn.Linear(self.layer_size, self.layer_size) for i in range(self.layers)])
+        # if layers=0 then we need to make fcs a ModuleList with 0 elements
+        if self.layers == 0:
+            self.fcs = ModuleList([])
+            self.fc1 = nn.Linear(self.n_inputs, self.n_outputs)
         self.fout = nn.Linear(self.layer_size, self.n_outputs)
 
         self.params = {'estimator_type':self.estimator_type, 'n_inputs': self.n_inputs, 
@@ -124,18 +128,21 @@ class NN(BaseEstimator, nn.Module):
         Returns:
         - y (torch.Tensor): The output tensor of shape (batch_size, num_classes)
         """
-        try:
+        if self.layers == 0:
             x = F.relu(self.fc1(x))
-        except:
+        else:
             try:
-                self.fc1 = nn.Linear(x.shape[1], self.layer_size)
                 x = F.relu(self.fc1(x))
             except:
-                self.fc1 = nn.Linear(x.shape[1], self.layer_size).to('cuda')
-                x = F.relu(self.fc1(x))
-        for fc in self.fcs:
-            x = F.relu(fc(x))
-        x = self.fout(x)
+                try:
+                    self.fc1 = nn.Linear(x.shape[1], self.layer_size)
+                    x = F.relu(self.fc1(x))
+                except:
+                    self.fc1 = nn.Linear(x.shape[1], self.layer_size).to('cuda')
+                    x = F.relu(self.fc1(x))
+            for fc in self.fcs:
+                x = F.relu(fc(x))
+            x = self.fout(x)
         return x
     
     def update_params(self, config: dict):
@@ -154,7 +161,7 @@ class NN(BaseEstimator, nn.Module):
         )
         return self
   
-class CNN(BaseEstimator, nn.Module):
+class CNN(nn.Module):
     def __init__(self, fc_layers=3, n_outputs=1, fc_size=75, n_inputs=52, kernel_size=3, 
                  out_channels=(3, 10), conv_layers=2, **kwargs):
         """
