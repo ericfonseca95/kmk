@@ -494,4 +494,53 @@ def get_topology(input_dim, layers, latent_dim):
     layer_topologies.append(latent_dim)
     return layer_topologies
     
+
+class global_input_NN(kmk.Trainer):
+    def __init__(self, reg, n_layers, layer_size, n_outputs, global_inputs):
+        # if optimizer_class not in config set it to Adam
+        if 'optimizer_class' not in reg.config.keys():
+            reg.config['optimizer_class'] = 'Adam'
+        reg.config['verbose'] = 10
+        super().__init__() 
+        self.reg = reg
+        self.n_layers = n_layers
+        self.layer_size = layer_size
+        self.n_outputs = n_outputs
+        self.estimator = self.reg.estimator
+        self.global_inputs = global_inputs
+        
+        for param in self.reg.estimator.parameters():
+            param.requires_grad = False
+        self.reg.estimator.fcs2 = nn.ModuleList() 
+        for i in range(self.n_layers):
+            if i == 0:
+                self.reg.estimator.fcs2.append(nn.Linear(self.global_inputs + self.reg.layer_size, self.layer_size))
+            else:
+                self.reg.estimator.fcs2.append(nn.Linear(self.layer_size, self.layer_size))
+        self.reg.estimator.fout = nn.Linear(self.layer_size, self.n_outputs)
+        self.reg.estimator.forward = self.forward
+        
     
+    def forward(self, x):
+        # first pass the data through the original fcs and model
+        x1, x2 = x[:, :self.global_inputs], x[:,self.global_inputs:]
+        # x2 contains the global inputs
+        x1 = self.reg.estimator.fc1(x1)
+        for fc in self.reg.estimator.fcs:
+            x = fc(x1)
+        # pass the global inputs through the new fcs and the embedding from the original model
+        x2 = torch.cat([x2, x1], dim=1)
+        for fc in self.reg.estimator.fcs2:
+            x2 = fc(x2)
+        x2 = self.reg.estimator.fout(x2)
+        return x2
+    # make it so that this replaces the forward method in the estimator
+    # make it so that the new forward method takes in the global inputs and the original inputs
+    def __call__(self, x):
+        return self.forward(x)
+        
+
+# make a scorer to work with sklearn
+def scorer(X, Y):
+    # return a dictionary of metrics
+    return {'MAE': mean_absolute_error(X, Y)}
