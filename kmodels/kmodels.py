@@ -495,7 +495,7 @@ def get_topology(input_dim, layers, latent_dim):
     return layer_topologies
     
 
-class global_input_NN(kmk.Trainer):
+class global_input_NN(Trainer):
     def __init__(self, reg, n_layers, layer_size, n_outputs, global_inputs):
         # if optimizer_class not in config set it to Adam
         if 'optimizer_class' not in reg.config.keys():
