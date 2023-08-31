@@ -51,39 +51,6 @@ def TLNN(model, X, change_layers=1):
         pass
     return new
 
-def TLLSTM(model, X, change_layers=1):
-    new = LSTM(n_lstm_layers=model.lstm_layers, n_lstm_outputs=model.n_lstm_outputs,
-               lstm_hidden_size=model.n_lstm_hidden_size, n_inputs=model.n_inputs,
-               n_timesteps=model.n_timesteps, n_linear_layers=model.n_linear_layers,
-               linear_layer_size=model.linear_layer_size)
-    test = new(X)
-    new.load_state_dict(model.state_dict())
-    children = [child for child in new.children()]
-    for child in children:
-        for param in child.parameters():
-            param.requires_grad = False
-    total_layers = len(children)
-    for i in range(change_layers):
-        layer = children[total_layers-i-1]
-        layer_params = layer.parameters()
-        for p in layer_params:
-            p.requires_grad = True
-    new.params.update(locals())
-    try:
-        new.params.pop('kwargs')
-    except:
-        pass
-    try:
-        new.parmas.pop('X')
-    except:
-        pass
-    try:
-        new.params.pop('self')
-    except:
-        pass
-    return new
-
-
 
 class NN(nn.Module):
     def __init__(self, n_inputs=106, n_outputs=1, layers=3, layer_size=75, change_layers=0, **kwargs):
@@ -260,12 +227,61 @@ class CNN(nn.Module):
         return super().to(device)
 
 
+class lstm(nn.Module):
+    def __init__(self, n_inputs=5, hidden_size=24, n_outputs=612, n_linear_layers=1, 
+                 layer_size=10, seq_len = 204):
+        super().__init__()
+        self.lstm = nn.LSTM(n_inputs, hidden_size, batch_first=True)
+        self.fcs = nn.ModuleList([nn.Linear(layer_size, layer_size) for i in range(n_linear_layers)])
+        self.fcs[0] = nn.Linear(hidden_size*seq_len, layer_size)
+        self.layer_size = layer_size
+        self.hidden_size = hidden_size
+        self.n_linear_layers = n_linear_layers 
+        self.output = nn.Linear(layer_size, n_outputs)
         
+    def forward(self, x):
+        
+        rows = x.shape[0]
+        
+        # passes data through LSTM layers
+        x, _ = self.lstm(x)
+        x = x.reshape(rows, -1)
+        
+        # Passes data through linear layers
+        for i, fc in enumerate(self.fcs):
+            x = F.relu(fc(x))
+        x = self.output(x)
+        return x
     
+    def unfreeze_lstm(self):
+        lstm_children = self.lstm.children()
+        for child in lstm_children:
+            for param in child.parameters():
+                param.requires_grad = True
+ 
+def TLLSTM(model, X, change_layers=1, unfreeze_lstm=False):
+    n_inputs = model.lstm.input_size
+    new = lstm(n_linear_layers=model.n_linear_layers, n_outputs=model.output.out_features, layer_size=model.layer_size, hidden_size = model.hidden_size, n_inputs = n_inputs)
+    test = new(X)
+    new.load_state_dict(model.state_dict())
+    children = [child for child in new.children()]
+    for child in children:
+        for param in child.parameters():
+            param.requires_grad = False
+    total_layers = len(children)
+    for i in range(change_layers):
+        layer = children[total_layers-i-1]
+        layer_params = layer.parameters()
+        for p in layer_params:
+            p.requires_grad = True
+    if unfreeze_lstm == True:
+        new.unfreeze_lstm()
+    return new
+       
 class LSTM(nn.Module):
     def __init__(self, n_lstm_layers=3, n_lstm_outputs=50, 
                  lstm_hidden_size=3, n_inputs=8, n_outputs=3, 
-                 n_timesteps=204, n_linear_layers=1, linear_layer_size=50):
+                 n_timesteps=204, n_linear_layers=1, linear_layer_size=50, **kwargs):
         super(LSTM, self).__init__()
         self.lstm_layers = n_lstm_layers
         self.n_lstm_hidden_size = lstm_hidden_size
@@ -276,20 +292,29 @@ class LSTM(nn.Module):
         self.n_linear_layers = n_linear_layers
         self.linear_layer_size = linear_layer_size
         self.lstm_output_dim = n_timesteps*n_lstm_layers
+        self.estimator_type = 'LSTM'
+        
+        for key in kwargs:
+            self.params[key] = kwargs[key]
+            
+        self.params = {'estimator_type':'LSTM', 'n_lstm_layers': self.lstm_layers,
+                        'n_lstm_outputs': self.n_lstm_outputs, 'lstm_hidden_size': self.n_lstm_hidden_size,
+                        'n_inputs': self.n_inputs, 'n_outputs': self.n_outputs, 'n_timesteps': self.n_timesteps,
+                        'n_linear_layers': self.n_linear_layers, 'linear_layer_size': self.linear_layer_size,
+                        'lstm_output_dim': self.lstm_output_dim}
+
         
         self.lstm = nn.LSTM(input_size=n_inputs, 
                             hidden_size=lstm_hidden_size, 
                             num_layers=n_lstm_layers)
-        
+        # compute the lstm output dim . use the state dict of self.lstm to get the output dim
+        self.lstm_output_dim = self.lstm.state_dict()['weight_hh_l0'].shape[1]*n_lstm_layers
         self.linear_layers = nn.ModuleList()
         self.first_linear_layer = nn.Linear(self.lstm_output_dim, linear_layer_size)
         for i in range(n_linear_layers):
             self.linear_layers.append(nn.Linear(linear_layer_size, linear_layer_size))
         self.output_layer = nn.Linear(linear_layer_size, n_outputs*self.n_timesteps)
-        self.params = {}
-        kwargs = locals()
-        for key in kwargs:
-            self.params[key] = kwargs[key]
+
         try:
             self.params.pop('self')
         except KeyError:
@@ -305,6 +330,7 @@ class LSTM(nn.Module):
             x = layer(x)
         x = self.output_layer(x)
         return x.reshape(self.n_timesteps, self.n_outputs)
+    
     
     def update_params(self, param_dict):
         for key in param_dict:
@@ -540,7 +566,106 @@ class global_input_NN(utils.Trainer):
         return self.forward(x)
         
 
-# make a scorer to work with sklearn
-def scorer(X, Y):
-    # return a dictionary of metrics
-    return {'MAE': mean_absolute_error(X, Y)}
+
+
+# We are creating a new class 'global_model', which is a PyTorch module (nn.Module).
+class global_model(nn.Module):
+    
+    # Here, we're initializing our class with a pre-trained model (ptmodel), 
+    # size of the layers in the model (layer_size), number of layers (n_layers),
+    # and the number of global inputs that the model will accept (n_global_inputs).
+    def __init__(self, ptmodel, layer_size=5, n_layers=1, n_global_inputs=2, freeze_ptmodel=True, change_layers=1):
+        # Call the parent (nn.Module) constructor.
+        super(global_model, self).__init__()
+
+        # Set the pre-trained model, the number of global inputs, 
+        # and the output dimensionality of the pre-trained model.
+        self.ptmodel = deepcopy(ptmodel)
+        self.n_global_inputs = n_global_inputs
+        self.ptmodel_output_dim = ptmodel.output.out_features
+        self.n_ptmodel_layers = len(ptmodel.fcs)
+        
+        # freeze the ptmodel parameters
+        if freeze_ptmodel:
+            # first freeze everything
+            for child in self.ptmodel.children():
+                for param in child.parameters():
+                    param.requires_grad = False
+            # unfreeze the last "change layers" in self.ptmodel.fcs + self.ptmodel.output.
+            # if change_layers == 1, then we only unfreeze the self.ptmodel.output
+            # if change_layers > 1, then we start unfreezing layers in self.ptmodel.fcs
+            for i in range(change_layers-1):
+                layer_number = self.n_ptmodel_layers - i - 1
+                layer = self.ptmodel.fcs[layer_number]
+                layer_params = layer.parameters()
+                for p in layer_params:
+                    p.requires_grad = True 
+            if change_layers > 0:
+                for param in self.ptmodel.output.parameters():
+                    param.requires_grad = True
+        else:
+            for child in self.ptmodel.children():
+                for param in child.parameters():
+                    param.requires_grad = True
+                
+        
+        # Define the first linear layer which will receive the concatenated 
+        # global inputs and the output of the pre-trained model.
+        self.input = nn.Linear(n_global_inputs + self.ptmodel_output_dim, layer_size)
+        # Define the inner fully connected layers of the model.
+        self.fcs = nn.ModuleList([nn.Linear(layer_size, layer_size) for i in range(n_layers)])
+
+        # Define the final output layer which will have the same size 
+        # as the output of the pre-trained model.
+        self.output = nn.Linear(layer_size, self.ptmodel.output.out_features)
+        
+        # Get which layers requires grad
+        pnames, gradstates = [], []
+        for paramname,param in zip(self.ptmodel.state_dict(),self.ptmodel.parameters()):
+            pnames.append(paramname)
+            gradstates.append(param.requires_grad)
+        # Format pnames and gradstates into a dataframe
+        grad_df = pd.DataFrame()
+        grad_df['PT Model Parameter'] = pnames
+        grad_df['Requires Grad'] = gradstates
+        self.grad_df = grad_df
+        
+    
+    # Define the forward pass of the model.
+    def forward(self, x_ptmodel, x_global):
+        rows = x_ptmodel.shape[0]
+        # Reshape x_global to ensure it is a 2D tensor.
+        x_global = x_global.reshape(x_global.shape[0], -1)
+
+
+        # Feed x_ptmodel into the pre-trained model and store the output.
+        #x_ptmodel = self.ptmodel(x_ptmodel)
+        # pass the ptmodel.lstm
+        x_ptmodel, (h, c) = self.ptmodel.lstm(x_ptmodel)
+        x_ptmodel = x_ptmodel.reshape(rows, -1)
+        # pass the ptmodel.fc
+        for fc in self.ptmodel.fcs:
+            x_ptmodel = F.relu(fc(x_ptmodel))
+        
+        x_ptmodel = self.ptmodel.output(x_ptmodel)
+        
+        # Concatenate the output of the pre-trained model with the global inputs.
+        x = torch.cat((x_ptmodel, x_global), dim=1)
+        # Apply the first layer (input) to x and then apply a ReLU activation function.
+        x = F.relu(self.input(x))
+
+        # For each fully connected layer, apply the layer to x and 
+        # then apply a ReLU activation function.
+        for i, fc in enumerate(self.fcs):
+            x = F.relu(fc(x))
+
+        # Apply the output layer to x.
+        x = self.output(x)
+
+        # Return the output of the model.
+        return x
+
+    # Define a function to return the output of the pre-trained model.
+    def get_ptmodel_output(self, x_ptmodel):
+        # Feed x_ptmodel into the pre-trained model and return the output.
+        return self.ptmodel(x_ptmodel)

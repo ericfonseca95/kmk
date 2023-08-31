@@ -261,11 +261,10 @@ class CNN(nn.Module):
 
 
         
-    
 class LSTM(nn.Module):
     def __init__(self, n_lstm_layers=3, n_lstm_outputs=50, 
                  lstm_hidden_size=3, n_inputs=8, n_outputs=3, 
-                 n_timesteps=204, n_linear_layers=1, linear_layer_size=50):
+                 n_timesteps=204, n_linear_layers=1, linear_layer_size=50, **kwargs):
         super(LSTM, self).__init__()
         self.lstm_layers = n_lstm_layers
         self.n_lstm_hidden_size = lstm_hidden_size
@@ -276,20 +275,29 @@ class LSTM(nn.Module):
         self.n_linear_layers = n_linear_layers
         self.linear_layer_size = linear_layer_size
         self.lstm_output_dim = n_timesteps*n_lstm_layers
+        self.estimator_type = 'LSTM'
+        
+        for key in kwargs:
+            self.params[key] = kwargs[key]
+            
+        self.params = {'estimator_type':'LSTM', 'n_lstm_layers': self.lstm_layers,
+                        'n_lstm_outputs': self.n_lstm_outputs, 'lstm_hidden_size': self.n_lstm_hidden_size,
+                        'n_inputs': self.n_inputs, 'n_outputs': self.n_outputs, 'n_timesteps': self.n_timesteps,
+                        'n_linear_layers': self.n_linear_layers, 'linear_layer_size': self.linear_layer_size,
+                        'lstm_output_dim': self.lstm_output_dim}
+
         
         self.lstm = nn.LSTM(input_size=n_inputs, 
                             hidden_size=lstm_hidden_size, 
                             num_layers=n_lstm_layers)
-        
+        # compute the lstm output dim . use the state dict of self.lstm to get the output dim
+        self.lstm_output_dim = self.lstm.state_dict()['weight_hh_l0'].shape[1]*n_lstm_layers
         self.linear_layers = nn.ModuleList()
         self.first_linear_layer = nn.Linear(self.lstm_output_dim, linear_layer_size)
         for i in range(n_linear_layers):
             self.linear_layers.append(nn.Linear(linear_layer_size, linear_layer_size))
         self.output_layer = nn.Linear(linear_layer_size, n_outputs*self.n_timesteps)
-        self.params = {}
-        kwargs = locals()
-        for key in kwargs:
-            self.params[key] = kwargs[key]
+
         try:
             self.params.pop('self')
         except KeyError:
@@ -305,6 +313,7 @@ class LSTM(nn.Module):
             x = layer(x)
         x = self.output_layer(x)
         return x.reshape(self.n_timesteps, self.n_outputs)
+    
     
     def update_params(self, param_dict):
         for key in param_dict:
@@ -494,4 +503,53 @@ def get_topology(input_dim, layers, latent_dim):
     layer_topologies.append(latent_dim)
     return layer_topologies
     
+
+class global_input_NN(utils.Trainer):
+    def __init__(self, reg, n_layers, layer_size, n_outputs, global_inputs):
+        # if optimizer_class not in config set it to Adam
+        if 'optimizer_class' not in reg.config.keys():
+            reg.config['optimizer_class'] = 'Adam'
+        reg.config['verbose'] = 10
+        super().__init__() 
+        self.reg = reg
+        self.n_layers = n_layers
+        self.layer_size = layer_size
+        self.n_outputs = n_outputs
+        self.estimator = self.reg.estimator
+        self.global_inputs = global_inputs
+        
+        for param in self.reg.estimator.parameters():
+            param.requires_grad = False
+        self.reg.estimator.fcs2 = nn.ModuleList() 
+        for i in range(self.n_layers):
+            if i == 0:
+                self.reg.estimator.fcs2.append(nn.Linear(self.global_inputs + self.reg.layer_size, self.layer_size))
+            else:
+                self.reg.estimator.fcs2.append(nn.Linear(self.layer_size, self.layer_size))
+        self.reg.estimator.fout = nn.Linear(self.layer_size, self.n_outputs)
+        self.reg.estimator.forward = self.forward
+        
     
+    def forward(self, x):
+        # first pass the data through the original fcs and model
+        x1, x2 = x[:, :self.global_inputs], x[:,self.global_inputs:]
+        # x2 contains the global inputs
+        x1 = self.reg.estimator.fc1(x1)
+        for fc in self.reg.estimator.fcs:
+            x = fc(x1)
+        # pass the global inputs through the new fcs and the embedding from the original model
+        x2 = torch.cat([x2, x1], dim=1)
+        for fc in self.reg.estimator.fcs2:
+            x2 = fc(x2)
+        x2 = self.reg.estimator.fout(x2)
+        return x2
+    # make it so that this replaces the forward method in the estimator
+    # make it so that the new forward method takes in the global inputs and the original inputs
+    def __call__(self, x):
+        return self.forward(x)
+        
+
+# make a scorer to work with sklearn
+def scorer(X, Y):
+    # return a dictionary of metrics
+    return {'MAE': mean_absolute_error(X, Y)}

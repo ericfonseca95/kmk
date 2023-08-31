@@ -334,16 +334,16 @@ class Trainer():
             raise ValueError("metric must be a callable function or a valid sklearn metric string")
 
         if isinstance(x, (np.ndarray, pd.DataFrame)):
-            x = torch.from_numpy(x.astype('float32')).to('cpu')
+            x = torch.from_numpy(x.astype('float32')).to(self.device)
         elif isinstance(x, torch.Tensor):
-            x = x.float().to('cpu')
+            x = x.float().to(self.device)
         else:
             raise TypeError("x must be a numpy array, pandas DataFrame, or torch tensor")
 
         if isinstance(y, np.ndarray):
-            y = torch.from_numpy(y).to('cpu')
+            y = torch.from_numpy(y).to(self.device)
         elif isinstance(y, torch.Tensor):
-            y = y.to('cpu')
+            y = y.to(self.device)
         else:
             raise TypeError("y must be a numpy array or torch tensor")
 
