@@ -301,7 +301,7 @@ class Trainer():
         #self.estimator, self.optimizer = get_model(self.estimator_type, self.config
         self.estimator, self.optimizer = get_model(self.estimator_type, self.config)
         self.estimator = self.estimator.to(self.device)
-        self.dataloader = DataLoader(TensorDataset(x, y), batch_size=self.batch_size, shuffle=True)
+        self.dataloader = DataLoader(TensorDataset(x, y), batch_size=self.batch_size, shuffle=False, num_workers=2)
         self.train()
         return self
         
@@ -413,12 +413,7 @@ class Trainer():
         start = time.time()
         for batch_idx, data in enumerate(self.dataloader):
             y = data[1].to(self.device)
-            x = data[0].to(self.device)
-            batch_idx = np.arange(batch_idx * self.batch_size, (batch_idx + 1) * self.batch_size)
-            batch_idx = torch.from_numpy(batch_idx).to(self.device)
-            if batch_idx[-1] > x[0].shape[0]:
-                batch_idx = batch_idx[:x[0].shape[0]]
-                
+            x = data[0].to(self.device) 
             self.optimizer.zero_grad()
             loss = self.evaluate_loss(x, y)
             self.train_loss = loss.item()
@@ -566,7 +561,6 @@ def train_pytorch(model, X_train, Y_train, n_epochs=1000, batch_size=int(1e3), l
     losses = []
     batches = batch_data(X_train, batch_size)
     model = model.to(device)
-    #optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
     loss_func = torch.nn.MSELoss()
     losses = run_epochs(model, X_train, Y_train, loss_func, optimizer, batches, n_epochs=n_epochs)
     return [i.detach().cpu() for i in losses]
@@ -613,7 +607,7 @@ def get_random_params(layers=[2, 10], layer_size=[10, 100], learning_rate=[0.000
     return params
 
 
-def get_model(params):
+def get_lstm_model(params):
     model = lstm(n_inputs=8, hidden_size=30, n_outputs=600, n_linear_layers=1, 
                  layer_size=10, lstm_n_outputs=30)
     lr = params['learning_rate']
