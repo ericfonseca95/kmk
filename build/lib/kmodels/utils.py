@@ -277,6 +277,7 @@ class Trainer():
         self.loss_func = self.loss_func.to(self.device)
         self.optimizer_params = {k: v for k, v in self.config.items() if k in self.optimizer_keys}
         self.optimizer_class = torch.optim.Adam
+        
         # change 'lr_init' to 'lr' for the optimizer
         self.optimizer_params['lr'] = self.optimizer_params.pop('lr_init')
         self.optimizer = self.optimizer_class(self.estimator.parameters(), **self.optimizer_params)
@@ -301,7 +302,12 @@ class Trainer():
         #self.estimator, self.optimizer = get_model(self.estimator_type, self.config
         self.estimator, self.optimizer = get_model(self.estimator_type, self.config)
         self.estimator = self.estimator.to(self.device)
-        self.dataloader = DataLoader(TensorDataset(x, y), batch_size=self.batch_size, shuffle=True, num_workers=2)
+        #self.dataloader = DataLoader(TensorDataset(x, y), batch_size=self.batch_size, shuffle=True, num_workers=4, persistent_workers=True)
+        # self.dataset = TensorDataset(x, y)
+        self.x = x
+        self.y = y
+        self.x = self.x.to(self.device)
+        self.y = self.y.to(self.device)
         self.train()
         return self
         
@@ -404,28 +410,34 @@ class Trainer():
         self.losses = torch.tensor([]).to(self.device)
         self.loss_func = self.loss_func.to(self.device)
         self.optimizer = torch.optim.Adam(self.estimator.parameters(), lr=self.lr_init)
+        self.batches = self.batch_data(self.batch_size)
         for epoch in range(self.epochs):
             train_loss = self.train_epoch(epoch)
             self.losses = torch.cat((self.losses, torch.tensor([train_loss]).to(self.device)))
         return self
+    
+    def batch_data(self, batch_size):
+        # using the indicies of X batch the indexes and return a list of indicies
+        # get the indicies of X from self.dataset
+        indicies = np.arange(self.train_observations)
+        # shuffle the indicies
+        np.random.shuffle(indicies)
+        # now batch the indicies
+        batch_index = np.arange(0, self.train_observations, batch_size)
+        return np.array([indicies[batch_index[i]:batch_index[i+1]] for i in range(len(batch_index)-1)])
+        
 
     def train_epoch(self, epoch):
         start = time.time()
-        for batch_idx, data in enumerate(self.dataloader):
-            y = data[1].to(self.device)
-            x = data[0].to(self.device)
-            # batch_idx = np.arange(batch_idx * self.batch_size, (batch_idx + 1) * self.batch_size)
-            # batch_idx = torch.from_numpy(batch_idx).to(self.device)
-            # if batch_idx[-1] > x[0].shape[0]:
-            #     batch_idx = batch_idx[:x[0].shape[0]]
-                
+        for batch_idx in self.batches:
+            x = self.x[batch_idx,:]
+            y = self.y[batch_idx,:]
             self.optimizer.zero_grad()
             loss = self.evaluate_loss(x, y)
             self.train_loss = loss.item()
             loss.backward()
             self.optimizer.step()
             torch.cuda.empty_cache()
-            gc.collect()
         end = time.time()
         
         if self.verbose != 0 and epoch % self.verbose == 0:
@@ -566,7 +578,6 @@ def train_pytorch(model, X_train, Y_train, n_epochs=1000, batch_size=int(1e3), l
     losses = []
     batches = batch_data(X_train, batch_size)
     model = model.to(device)
-    #optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
     loss_func = torch.nn.MSELoss()
     losses = run_epochs(model, X_train, Y_train, loss_func, optimizer, batches, n_epochs=n_epochs)
     return [i.detach().cpu() for i in losses]

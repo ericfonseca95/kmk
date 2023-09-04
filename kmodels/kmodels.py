@@ -53,7 +53,7 @@ def TLNN(model, X, change_layers=1):
 
 
 class NN(nn.Module):
-    def __init__(self, n_inputs=106, n_outputs=1, layers=3, layer_size=75, change_layers=0, **kwargs):
+    def __init__(self, n_inputs=106, n_outputs=1, fc_layers=3, fc_size=75, change_layers=0, **kwargs):
         """
         Initialize the NN model with a given number of layers and layer size.
         
@@ -66,23 +66,23 @@ class NN(nn.Module):
         self.estimator_type = 'NN'
         self.n_inputs = n_inputs
         self.n_outputs = n_outputs
-        self.layer_size = layer_size
-        self.layers = layers
+        self.fc_size = fc_size
+        self.fc_layers = fc_layers
         self.change_layers = change_layers
         # set all keys in kwargs as attributes
         for key in kwargs:
             setattr(self, key, kwargs[key])
-        self.fc1 = nn.Linear(self.n_inputs, self.layer_size)
-        self.fcs = ModuleList([nn.Linear(self.layer_size, self.layer_size) for i in range(self.layers)])
+        self.fc1 = nn.Linear(self.n_inputs, self.fc_size)
+        self.fcs = ModuleList([nn.Linear(self.fc_size, self.fc_size) for i in range(self.fc_layers)])
         # if layers=0 then we need to make fcs a ModuleList with 0 elements
-        if self.layers == 0:
+        if self.fc_layers == 0:
             self.fcs = ModuleList([])
             self.fc1 = nn.Linear(self.n_inputs, self.n_outputs)
-        self.fout = nn.Linear(self.layer_size, self.n_outputs)
+        self.fout = nn.Linear(self.fc_size, self.n_outputs)
 
         self.params = {'estimator_type':self.estimator_type, 'n_inputs': self.n_inputs, 
-                       'n_outputs': self.n_outputs, 'layers': self.layers, \
-                           'layer_size': self.layer_size, 'change_layers': self.change_layers}
+                       'n_outputs': self.n_outputs, 'fc_layers': self.fc_layers, \
+                           'fc_size': self.fc_size, 'change_layers': self.change_layers}
         return 
 
     def forward(self, x):
@@ -95,18 +95,10 @@ class NN(nn.Module):
         Returns:
         - y (torch.Tensor): The output tensor of shape (batch_size, num_classes)
         """
-        if self.layers == 0:
+        if self.fc_layers == 0:
             x = F.relu(self.fc1(x))
         else:
-            try:
-                x = F.relu(self.fc1(x))
-            except:
-                try:
-                    self.fc1 = nn.Linear(x.shape[1], self.layer_size)
-                    x = F.relu(self.fc1(x))
-                except:
-                    self.fc1 = nn.Linear(x.shape[1], self.layer_size).to('cuda')
-                    x = F.relu(self.fc1(x))
+            x = F.relu(self.fc1(x))
             for fc in self.fcs:
                 x = F.relu(fc(x))
             x = self.fout(x)
@@ -122,8 +114,8 @@ class NN(nn.Module):
         self.__init__(
             n_inputs=self.n_inputs,
             n_outputs=self.n_outputs,
-            layers=self.layers,
-            layer_size=self.layer_size,
+            fc_layers=self.fc_layers,
+            fc_size=self.fc_size,
             change_layers=self.change_layers
         )
         return self
