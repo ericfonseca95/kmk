@@ -309,6 +309,9 @@ class Trainer():
         self.x = self.x.to(self.device)
         self.y = self.y.to(self.device)
         self.train()
+        # delete self.x and self.y to free up memory
+        del self.x
+        del self.y
         return self
         
     # rewrite the predict functino to use a dataloader to batch the data

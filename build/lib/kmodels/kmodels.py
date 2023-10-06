@@ -51,6 +51,38 @@ def TLNN(model, X, change_layers=1):
         pass
     return new
 
+def TLCNN(model, X, change_layers=1):
+    new = CNN(fc_layers=model.fc_layers, n_outputs=model.n_outputs, 
+              fc_size=model.fc_size, n_inputs=model.n_inputs, 
+              kernel_size=model.kernel_size, out_channels=model.out_channels, 
+              conv_layers=model.conv_layers)
+    test = new(X)
+    new.load_state_dict(model.state_dict())
+    children = [child for child in new.children()]
+    for child in children:
+        for param in child.parameters():
+            param.requires_grad = False
+    total_layers = len(children)
+    for i in range(change_layers):
+        layer = children[total_layers-i-1]
+        layer_params = layer.parameters()
+        for p in layer_params:
+            p.requires_grad = True
+    new.params.update(locals())
+    try:
+        new.params.pop('kwargs')
+    except:
+        pass
+    try:
+        new.parmas.pop('X')
+    except:
+        pass
+    try:
+        new.params.pop('self')
+    except:
+        pass
+    return new
+
 
 class NN(nn.Module):
     def __init__(self, n_inputs=106, n_outputs=1, fc_layers=3, fc_size=75, change_layers=0, **kwargs):
