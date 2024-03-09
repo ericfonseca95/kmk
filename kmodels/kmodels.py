@@ -151,7 +151,7 @@ class NN(nn.Module):
             change_layers=self.change_layers
         )
         return self
-  
+
 class CNN(nn.Module):
     def __init__(self, fc_layers=3, n_outputs=1, fc_size=75, n_inputs=52, kernel_size=3, 
                  out_channels=(3, 10), conv_layers=2, **kwargs):
@@ -159,82 +159,165 @@ class CNN(nn.Module):
         Initialize the convolutional model with a given number of fc_layers, output size, and layer size.
         
         Args:
-        - fc_layers (int): The number of fully connected fc_layers in the model.
+        - fc_layers (int): The number of fully connected layers in the model.
         - n_outputs (int): The number of output classes for the model.
         - fc_size (int): The number of neurons in each fully connected layer.
         - n_inputs (int): The number of input features for the model.
-        - kernel_size (int): The kernel size for the convolutional fc_layers.
-        - out_channels (tuple): The number of output channels for the convolutional fc_layers.
+        - kernel_size (int): The kernel size for the convolutional layers.
+        - out_channels (tuple): The number of output channels for the convolutional layers.
+        - conv_layers (int): The number of convolutional layers in the model.
         """
         super(CNN, self).__init__()
-        self.fc_layers = fc_layers
+        # take all the inputs and make them attributes
         self.estimator_type = 'CNN'
-        self.conv_padding = 0
+        self.fc_layers = fc_layers
         self.fc_size = fc_size
-        self.out_channels = out_channels
-        self.kernel_size = kernel_size
-        self.n_inputs = n_inputs
         self.n_outputs = n_outputs
+        self.n_inputs = n_inputs
+        self.kernel_size = kernel_size
+        self.out_channels = out_channels
         self.conv_layers = conv_layers
+        
+        if conv_layers != len(out_channels):
+            raise ValueError("The length of `out_channels` must match `conv_layers`.")
+        
         self.conv_channels = [1] + list(out_channels)
-        self.cs = ModuleList([nn.Conv1d(self.conv_channels[i], self.conv_channels[i+1], self.kernel_size) for i in range(len(out_channels)-1)])
-        # get the dimension of the last cs layer
-        self.stride = 1
-        # calculate the output size of conv layers
-        self.input_fc_size = self.n_inputs
-        for i in range(self.conv_layers):
-            self.input_fc_size = ((self.input_fc_size - self.kernel_size + 2*self.conv_padding) / self.stride) + 1
-
-        # reduce size by factor of kernel size after average pooling in each conv layer
-        self.input_fc_size = self.input_fc_size // self.kernel_size**self.conv_layers
-
+        
+        # Create convolutional layers
+        self.cs = ModuleList([
+            nn.Conv1d(self.conv_channels[i], self.conv_channels[i+1], kernel_size)
+            for i in range(conv_layers)
+        ])
+        
+        # Calculate the output size after convolutional layers
+        self.input_fc_size = n_inputs
+        for _ in range(conv_layers):
+            self.input_fc_size = ((self.input_fc_size - kernel_size) // 1) + 1  # Considering stride=1
+            self.input_fc_size = self.input_fc_size // kernel_size  # After average pooling
+        
         self.input_fc_size *= self.conv_channels[-1]  # multiply by the number of last conv layer channels
-
         self.input_fc_size = int(self.input_fc_size)
-
-        self.fc1 = nn.Linear(138, self.fc_size)
-        self.fcs = ModuleList([nn.Linear(self.fc_size, self.fc_size) for i in range(fc_layers-1)])
-        self.fout = nn.Linear(self.fc_size, n_outputs)
-        self.params = {'estimator_type':'CNN', 'fc_layers': self.fc_layers, 'fc_size': self.fc_size, 
-                       'out_channels': self.out_channels, 'kernel_size': self.kernel_size, 
-                       'conv_layers': self.conv_layers,
-                       'n_inputs': self.n_inputs, 'n_outputs': self.n_outputs, 'conv_padding': self.conv_padding}
-         # set all keys in kwargs as attributes
-        for key in kwargs:
-            setattr(self, key, kwargs[key])
-            
-        if self.conv_layers != len(self.out_channels):
-            self.out_channels = [out_channels[0] for i in range(conv_layers)]
-
-        # update params with matching keys in self.__dict__
-        self.params.update({i : self.__dict__[i] for i in self.__dict__ if i in self.params})
+        
+        # Fully connected layers
+        self.fc1 = nn.Linear(self.input_fc_size, fc_size)
+        self.fcs = ModuleList([nn.Linear(fc_size, fc_size) for _ in range(fc_layers - 1)])
+        self.fout = nn.Linear(fc_size, n_outputs)
+        
+        self.params = {
+            'fc_layers': fc_layers, 'fc_size': fc_size, 'n_outputs': n_outputs, 'n_inputs': n_inputs, 
+            'kernel_size': kernel_size, 'out_channels': out_channels, 'conv_layers': conv_layers
+        }
+        
+        # Update self with kwargs
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+            if key in self.params:
+                self.params[key] = value
     
-    def forward(self,x):
-        rows = x.shape[0]
-        cols = x.shape[1]
-        x = x.reshape(rows, 1, cols)
-        # check if x is on the same device as the model, if not, move it
-        if x.device != self.device:
-            x = x.to(self.device)
+    def forward(self, x):
+        x = x.unsqueeze(1)  # Add channel dimension
+        
+        # Convolutional layers with ReLU and AvgPool
         for conv in self.cs:
             x = F.relu(conv(x))
-            # pool average
             x = F.avg_pool1d(x, self.kernel_size)
-        x = x.flatten().reshape(rows, -1)
-        cols = x.shape[1]
-        try:
-            x = F.relu(self.fc1(x))
-        except:
-            try:
-                self.fc1 = nn.Linear(cols, self.fc_size)
-                x = F.relu(self.fc1(x))
-            except:
-                self.fc1 = nn.Linear(cols, self.fc_size).to('cuda')
-                x = F.relu(self.fc1(x))
+        
+        # Flatten the output for the fully connected layers
+        x = torch.flatten(x, 1)
+        
+        # Fully connected layers with ReLU
+        x = F.relu(self.fc1(x))
         for fc in self.fcs:
             x = F.relu(fc(x))
+        
+        # Output layer
         x = self.fout(x)
+        
         return x
+
+# class CNN(nn.Module):
+#     def __init__(self, fc_layers=3, n_outputs=1, fc_size=75, n_inputs=52, kernel_size=3, 
+#                  out_channels=(3, 10), conv_layers=2, **kwargs):
+#         """
+#         Initialize the convolutional model with a given number of fc_layers, output size, and layer size.
+        
+#         Args:
+#         - fc_layers (int): The number of fully connected fc_layers in the model.
+#         - n_outputs (int): The number of output classes for the model.
+#         - fc_size (int): The number of neurons in each fully connected layer.
+#         - n_inputs (int): The number of input features for the model.
+#         - kernel_size (int): The kernel size for the convolutional fc_layers.
+#         - out_channels (tuple): The number of output channels for the convolutional fc_layers.
+#         """
+#         super(CNN, self).__init__()
+#         self.fc_layers = fc_layers
+#         self.estimator_type = 'CNN'
+#         self.conv_padding = 0
+#         self.fc_size = fc_size
+#         self.out_channels = out_channels
+#         self.kernel_size = kernel_size
+#         self.n_inputs = n_inputs
+#         self.n_outputs = n_outputs
+#         self.conv_layers = conv_layers
+#         self.conv_channels = [1] + list(out_channels)
+#         self.cs = ModuleList([nn.Conv1d(self.conv_channels[i], self.conv_channels[i+1], self.kernel_size) for i in range(len(out_channels)-1)])
+#         # get the dimension of the last cs layer
+#         self.stride = 1
+#         # calculate the output size of conv layers
+#         self.input_fc_size = self.n_inputs
+#         for i in range(self.conv_layers):
+#             self.input_fc_size = ((self.input_fc_size - self.kernel_size + 2*self.conv_padding) / self.stride) + 1
+
+#         # reduce size by factor of kernel size after average pooling in each conv layer
+#         self.input_fc_size = self.input_fc_size // self.kernel_size**self.conv_layers
+
+#         self.input_fc_size *= self.conv_channels[-1]  # multiply by the number of last conv layer channels
+
+#         self.input_fc_size = int(self.input_fc_size)
+
+#         self.fc1 = nn.Linear(138, self.fc_size)
+#         self.fcs = ModuleList([nn.Linear(self.fc_size, self.fc_size) for i in range(fc_layers-1)])
+#         self.fout = nn.Linear(self.fc_size, n_outputs)
+#         self.params = {'estimator_type':'CNN', 'fc_layers': self.fc_layers, 'fc_size': self.fc_size, 
+#                        'out_channels': self.out_channels, 'kernel_size': self.kernel_size, 
+#                        'conv_layers': self.conv_layers,
+#                        'n_inputs': self.n_inputs, 'n_outputs': self.n_outputs, 'conv_padding': self.conv_padding}
+#          # set all keys in kwargs as attributes
+#         for key in kwargs:
+#             setattr(self, key, kwargs[key])
+            
+#         if self.conv_layers != len(self.out_channels):
+#             self.out_channels = [out_channels[0] for i in range(conv_layers)]
+
+#         # update params with matching keys in self.__dict__
+#         self.params.update({i : self.__dict__[i] for i in self.__dict__ if i in self.params})
+    
+#     def forward(self,x):
+#         rows = x.shape[0]
+#         cols = x.shape[1]
+#         x = x.reshape(rows, 1, cols)
+#         # check if x is on the same device as the model, if not, move it
+#         if x.device != self.device:
+#             x = x.to(self.device)
+#         for conv in self.cs:
+#             x = F.relu(conv(x))
+#             # pool average
+#             x = F.avg_pool1d(x, self.kernel_size)
+#         x = x.flatten().reshape(rows, -1)
+#         cols = x.shape[1]
+#         try:
+#             x = F.relu(self.fc1(x))
+#         except:
+#             try:
+#                 self.fc1 = nn.Linear(cols, self.fc_size)
+#                 x = F.relu(self.fc1(x))
+#             except:
+#                 self.fc1 = nn.Linear(cols, self.fc_size).to('cuda')
+#                 x = F.relu(self.fc1(x))
+#         for fc in self.fcs:
+#             x = F.relu(fc(x))
+#         x = self.fout(x)
+#         return x
 
 
     def update_params(self, config: dict):

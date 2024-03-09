@@ -25,7 +25,7 @@ import torch
 from torch.utils.data import TensorDataset, DataLoader
 import time
 import gc
-
+import copy
 # lets get the MultiLRstep from torch to schedule the learning rate
 from torch.optim.lr_scheduler import MultiStepLR
 from . import kmodels as models
@@ -100,26 +100,34 @@ class Regression_loss(nn.Module):
         return self.__call__(z, y)
     
 class L2_regularization(nn.Module):
-    def __init__(self, gamma):
+    def __init__(self, gamma, device='cpu'):
         super(L2_regularization, self).__init__()
         self.gamma = gamma
-        self.reg_loss = []
+        self.reg_loss = np.array([])
     def __call__(self, model):
+        self.device = model.device
+        L2_loss = torch.tensor([]).to(self.device)
         for param in model.parameters():
-            self.reg_loss.append(0.5 * self.gamma * torch.sum(torch.pow(param, 2)))
-        return self.reg_loss[-1]
+            L2_loss = torch.cat((L2_loss, 0.5 * self.gamma * torch.sum(torch.pow(param, 2)).view(1)))
+        L2_loss = torch.sum(L2_loss)
+        self.reg_loss = np.append(self.reg_loss, L2_loss.item())
+        return L2_loss
     def forward(self, model):
         return self.__call__(model)
 
 class L1_regularization(nn.Module):
-    def __init__(self, beta):
+    def __init__(self, beta, device='cpu'):
         super(L1_regularization, self).__init__()
         self.beta = beta
-        self.reg_loss = []
+        self.reg_loss = np.array([])
     def __call__(self, model):
+        self.device = model.device
+        L1_loss = torch.tensor([]).to(self.device)
         for param in model.parameters():
-            self.reg_loss.append(self.beta * torch.sum(torch.abs(param)))
-        return self.reg_loss[-1]
+            L1_loss = torch.cat((L1_loss, self.beta * torch.sum(torch.abs(param)).view(1)))
+        L1_loss = torch.sum(L1_loss)
+        self.reg_loss = np.append(self.reg_loss, L1_loss.item())
+        return L1_loss
     def __iter__(self):
         return iter(self.reg_loss)
     def forward(self, model):
@@ -207,9 +215,11 @@ class Trainer():
         if 'optimizer_class' not in self.config.keys():
             self.config['optimizer_class'] = 'Adam'
         self.device = 'cpu'
-        self.estimator_type = self.config.pop('estimator_type', 'NN')
+        # self.estimator_type = self.config.pop('estimator_type', 'NN')
         if 'estimator_type' == None:
             self.estimator_type = 'NN'
+        else:
+            self.estimator_type = self.config['estimator_type']
         self.estimator_params = get_model_params(estimator_type = self.estimator_type, config=self.config)
         self.training_params = {
             'epochs': 100,
@@ -256,16 +266,19 @@ class Trainer():
         if self.reg_factor > 0:
             self.regression_loss = Regression_loss(self.reg_factor)
             self.regression_loss = self.regression_loss.to(self.device)
+            self.regression_losses = torch.tensor([]).to(self.device)
             self.loss_terms.append(self.regression_loss)
         
         if self.beta > 0:
             self.L1_reg = L1_regularization(self.beta)
             self.L1_reg = self.L1_reg.to(self.device)
+            self.L1_losses = torch.tensor([]).to(self.device)
             self.loss_terms.append(self.L1_reg)
         
         if self.gamma > 0:
             self.L2_reg = L2_regularization(self.gamma)
             self.L2_reg = self.L2_reg.to(self.device)
+            self.L2_losses = torch.tensor([]).to(self.device)
             self.loss_terms.append(self.L2_reg)
 
         self.estimator, self.optimizer = get_model(self.estimator_type, self.config)
@@ -283,7 +296,7 @@ class Trainer():
         self.optimizer = self.optimizer_class(self.estimator.parameters(), **self.optimizer_params)
         
         
-    def fit(self, x, y):
+    def fit(self, x, y, x_valid=None, y_valid=None):
         self.n_inputs = x.shape[1]
         self.n_outputs = y.shape[1]
         self.train_observations = x.shape[0]
@@ -300,7 +313,7 @@ class Trainer():
                 y = torch.from_numpy(y).float()
 
         #self.estimator, self.optimizer = get_model(self.estimator_type, self.config
-        self.estimator, self.optimizer = get_model(self.estimator_type, self.config)
+        # self.estimator, self.optimizer = get_model(self.estimator_type, self.config)
         self.estimator = self.estimator.to(self.device)
         #self.dataloader = DataLoader(TensorDataset(x, y), batch_size=self.batch_size, shuffle=True, num_workers=4, persistent_workers=True)
         # self.dataset = TensorDataset(x, y)
@@ -308,6 +321,16 @@ class Trainer():
         self.y = y
         self.x = self.x.to(self.device)
         self.y = self.y.to(self.device)
+        if x_valid is not None and y_valid is not None:
+            self.x_valid = x_valid
+            self.y_valid = y_valid
+            self.x_valid = self.x_valid.to(self.device)
+            self.y_valid = self.y_valid.to(self.device)
+        else:
+            self.x_valid = None
+            self.y_valid = None
+        
+        
         self.train()
         # delete self.x and self.y to free up memory
         del self.x
@@ -411,12 +434,60 @@ class Trainer():
     def train(self):
         self.estimator = self.estimator.to(self.device)
         self.losses = torch.tensor([]).to(self.device)
+        self.L1_loss = torch.tensor([])
+        self.L2_loss = torch.tensor([])
+        self.valid_mse = torch.tensor([])
+        self.valid_r2 = torch.tensor([])
+        self.valid_mae = torch.tensor([])
+        self.train_mse = torch.tensor([])
+        self.train_r2 = torch.tensor([])
+        self.train_mae = torch.tensor([])
+
+
+
         self.loss_func = self.loss_func.to(self.device)
         self.optimizer = torch.optim.Adam(self.estimator.parameters(), lr=self.lr_init)
         self.batches = self.batch_data(self.batch_size)
         for epoch in range(self.epochs):
             train_loss = self.train_epoch(epoch)
             self.losses = torch.cat((self.losses, torch.tensor([train_loss]).to(self.device)))
+            if self.beta > 0:
+                self.L1_losses = torch.cat((self.L1_losses, torch.tensor([self.L1_reg.reg_loss[-1]]).to(self.device)))
+            if self.gamma > 0:
+                self.L2_losses = torch.cat((self.L2_losses, torch.tensor([self.L2_reg.reg_loss[-1]]).to(self.device)))
+            with torch.no_grad():
+                # train stats
+                
+                x_copy = copy.deepcopy(self.x)
+                x_copy = x_copy.to(self.device)
+                pred = self.predict(x_copy).detach().cpu().numpy()
+                # self.y = self.y.detach().cpu().numpy()
+                y_copy = copy.deepcopy(self.y)
+                y_copy = y_copy.detach().cpu().numpy()
+                mse = mean_squared_error(y_copy, pred)
+                r2 = r2_score(y_copy, pred)
+                mae = mean_absolute_error(y_copy, pred)
+                self.train_mse = torch.cat((self.train_mse, torch.tensor([mse])))
+                self.train_r2 = torch.cat((self.train_r2, torch.tensor([r2])))
+                self.train_mae = torch.cat((self.train_mae, torch.tensor([mae])))
+
+                # valid stats
+                if self.x_valid is not None and self.y_valid is not None:
+                    # use torch stat functions to get the mean of the losses
+                    valid_pred = self.predict(self.x_valid).detach().cpu().numpy()
+                    try:
+                        self.y_valid = self.y_valid.detach().cpu().numpy()
+                    except:
+                        pass
+                    valid_mse = mean_squared_error(self.y_valid, valid_pred)
+                    valid_r2 = r2_score(self.y_valid, valid_pred)
+                    valid_mae = mean_absolute_error(self.y_valid, valid_pred)
+                    self.valid_mse = torch.cat((self.valid_mse, torch.tensor([valid_mse])))
+                    self.valid_r2 = torch.cat((self.valid_r2, torch.tensor([valid_r2])))
+                    self.valid_mae = torch.cat((self.valid_mae, torch.tensor([valid_mae])))
+                    
+
+            
         return self
     
     def batch_data(self, batch_size):
@@ -466,15 +537,23 @@ class Trainer():
         if self.beta > 0:
             L1_loss = self.L1_reg(self.estimator)
             total_loss += L1_loss
+            # if len(self.L1_losses) == 0:
+            #     self.L1_losses = torch.tensor([L1_loss]).reshape(-1, 1)
+            # else:
+            #     self.L1_losses = torch.cat((self.L1_losses, L1_loss))
             
         # L2 selfularization (Ridge)
         if self.gamma > 0:
             L2_loss = self.L2_reg(self.estimator)
             total_loss += L2_loss
+            # if len(self.L2_losses) == 0:
+            #     self.L2_losses = torch.tensor([L2_loss]).reshape(-1,1)
+            # else:
+            #     self.L2_losses = torch.cat((self.L2_losses, L2_loss))
         
         # VAE selfression loss
         #if y is not None and self.reg_factor > 0 and self.is_VAE == True:
-           #  z = self.estimator.encode(X)[0]
+            #  z = self.estimator.encode(X)[0]
             #self.ression_loss = self.regression_loss(z, z_y) # typos in the original code
             #total_loss += selfression_loss
         return total_loss
