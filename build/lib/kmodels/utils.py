@@ -175,6 +175,8 @@ def get_model(estimator_type: str, config: dict):
         model = models.LSTM(**config)
     elif estimator_type == 'CNN':
         model = models.CNN(**config)
+    elif estimator_type == 'CNN_global':
+        model = models.CNN_global(**config)
     elif estimator_type == 'Hierarch_VAE':
         model = models.Hierarch_VAE(**config)
     else:
@@ -201,6 +203,8 @@ def get_model_params(estimator_type: str, config: dict):
         model = models.LSTM(**config)
     elif estimator_type == 'CNN':
         model = models.CNN(**config)
+    elif estimator_type == 'CNN_global':
+        model = models.CNN_global(**config)
     elif estimator_type == 'Hierarch_VAE':
         model = models.Hierarch_VAE(**config)
     else:
@@ -294,7 +298,9 @@ class Trainer():
         # change 'lr_init' to 'lr' for the optimizer
         self.optimizer_params['lr'] = self.optimizer_params.pop('lr_init')
         self.optimizer = self.optimizer_class(self.estimator.parameters(), **self.optimizer_params)
-        
+        model_params = self.estimator.params
+        # update config with model_params
+        self.config.update(model_params)
         
     def fit(self, x, y, x_valid=None, y_valid=None):
         self.n_inputs = x.shape[1]
@@ -457,7 +463,6 @@ class Trainer():
                 self.L2_losses = torch.cat((self.L2_losses, torch.tensor([self.L2_reg.reg_loss[-1]]).to(self.device)))
             with torch.no_grad():
                 # train stats
-                
                 x_copy = copy.deepcopy(self.x)
                 x_copy = x_copy.to(self.device)
                 pred = self.predict(x_copy).detach().cpu().numpy()
@@ -497,6 +502,12 @@ class Trainer():
         # shuffle the indicies
         np.random.shuffle(indicies)
         # now batch the indicies
+        if self.train_observations <= batch_size:
+            batch_size = self.train_observations-1
+            # let user know we changed the batch_size on the model
+            print(f"batch_size is larger than the number of observations, setting batch_size to {batch_size}")
+            self.batch_size = batch_size
+            self.config['batch_size'] = batch_size
         batch_index = np.arange(0, self.train_observations, batch_size)
         return np.array([indicies[batch_index[i]:batch_index[i+1]] for i in range(len(batch_index)-1)])
         
@@ -557,6 +568,24 @@ class Trainer():
             #self.ression_loss = self.regression_loss(z, z_y) # typos in the original code
             #total_loss += selfression_loss
         return total_loss
+
+
+
+            # style to follow
+# fig, ax1 = plt.subplots()
+# ax2 = ax1.twinx()
+# ax1.plot(tlmodel.valid_mae, 'b--', label='valid')
+# ax1.plot(tlmodel.train_mae, 'b', label='train')
+# ax1.set_xlabel('epoch')
+# ax1.set_ylabel('mae', color='b')
+# ax1.tick_params('y', colors='b')
+# ax1.legend()
+
+# ax2.plot(tlmodel.valid_r2, 'r--', label='valid')
+# ax2.plot(tlmodel.train_r2, 'r', label='train')
+# ax2.set_ylabel('r2', color='r')
+# ax2.tick_params('y', colors='r')
+# ax2.legend()
 
 
     

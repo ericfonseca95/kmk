@@ -234,90 +234,99 @@ class CNN(nn.Module):
         x = self.fout(x)
         
         return x
-
-# class CNN(nn.Module):
-#     def __init__(self, fc_layers=3, n_outputs=1, fc_size=75, n_inputs=52, kernel_size=3, 
-#                  out_channels=(3, 10), conv_layers=2, **kwargs):
-#         """
-#         Initialize the convolutional model with a given number of fc_layers, output size, and layer size.
-        
-#         Args:
-#         - fc_layers (int): The number of fully connected fc_layers in the model.
-#         - n_outputs (int): The number of output classes for the model.
-#         - fc_size (int): The number of neurons in each fully connected layer.
-#         - n_inputs (int): The number of input features for the model.
-#         - kernel_size (int): The kernel size for the convolutional fc_layers.
-#         - out_channels (tuple): The number of output channels for the convolutional fc_layers.
-#         """
-#         super(CNN, self).__init__()
-#         self.fc_layers = fc_layers
-#         self.estimator_type = 'CNN'
-#         self.conv_padding = 0
-#         self.fc_size = fc_size
-#         self.out_channels = out_channels
-#         self.kernel_size = kernel_size
-#         self.n_inputs = n_inputs
-#         self.n_outputs = n_outputs
-#         self.conv_layers = conv_layers
-#         self.conv_channels = [1] + list(out_channels)
-#         self.cs = ModuleList([nn.Conv1d(self.conv_channels[i], self.conv_channels[i+1], self.kernel_size) for i in range(len(out_channels)-1)])
-#         # get the dimension of the last cs layer
-#         self.stride = 1
-#         # calculate the output size of conv layers
-#         self.input_fc_size = self.n_inputs
-#         for i in range(self.conv_layers):
-#             self.input_fc_size = ((self.input_fc_size - self.kernel_size + 2*self.conv_padding) / self.stride) + 1
-
-#         # reduce size by factor of kernel size after average pooling in each conv layer
-#         self.input_fc_size = self.input_fc_size // self.kernel_size**self.conv_layers
-
-#         self.input_fc_size *= self.conv_channels[-1]  # multiply by the number of last conv layer channels
-
-#         self.input_fc_size = int(self.input_fc_size)
-
-#         self.fc1 = nn.Linear(138, self.fc_size)
-#         self.fcs = ModuleList([nn.Linear(self.fc_size, self.fc_size) for i in range(fc_layers-1)])
-#         self.fout = nn.Linear(self.fc_size, n_outputs)
-#         self.params = {'estimator_type':'CNN', 'fc_layers': self.fc_layers, 'fc_size': self.fc_size, 
-#                        'out_channels': self.out_channels, 'kernel_size': self.kernel_size, 
-#                        'conv_layers': self.conv_layers,
-#                        'n_inputs': self.n_inputs, 'n_outputs': self.n_outputs, 'conv_padding': self.conv_padding}
-#          # set all keys in kwargs as attributes
-#         for key in kwargs:
-#             setattr(self, key, kwargs[key])
-            
-#         if self.conv_layers != len(self.out_channels):
-#             self.out_channels = [out_channels[0] for i in range(conv_layers)]
-
-#         # update params with matching keys in self.__dict__
-#         self.params.update({i : self.__dict__[i] for i in self.__dict__ if i in self.params})
     
-#     def forward(self,x):
-#         rows = x.shape[0]
-#         cols = x.shape[1]
-#         x = x.reshape(rows, 1, cols)
-#         # check if x is on the same device as the model, if not, move it
-#         if x.device != self.device:
-#             x = x.to(self.device)
-#         for conv in self.cs:
-#             x = F.relu(conv(x))
-#             # pool average
-#             x = F.avg_pool1d(x, self.kernel_size)
-#         x = x.flatten().reshape(rows, -1)
-#         cols = x.shape[1]
-#         try:
-#             x = F.relu(self.fc1(x))
-#         except:
-#             try:
-#                 self.fc1 = nn.Linear(cols, self.fc_size)
-#                 x = F.relu(self.fc1(x))
-#             except:
-#                 self.fc1 = nn.Linear(cols, self.fc_size).to('cuda')
-#                 x = F.relu(self.fc1(x))
-#         for fc in self.fcs:
-#             x = F.relu(fc(x))
-#         x = self.fout(x)
-#         return x
+
+import torch
+import torch.nn as nn
+from torch.nn import ModuleList, functional as F
+
+class CNN_global(nn.Module):
+    def __init__(self, fc_layers=3, n_outputs=1, fc_size=75, n_inputs=52, kernel_size=3,
+                 out_channels=(3, 10), conv_layers=2, global_vars=0, stride=1, **kwargs):
+        super(CNN_global, self).__init__()
+        self.fc_layers = fc_layers
+        self.fc_size = fc_size
+        self.n_outputs = n_outputs
+        self.kernel_size = kernel_size
+        self.out_channels = out_channels
+        self.conv_layers = conv_layers
+        self.global_vars = global_vars
+        self.local_vars = n_inputs - global_vars
+        self.stride = stride
+
+        # Validate configuration
+        if conv_layers != len(out_channels):
+            raise ValueError("Length of `out_channels` must match `conv_layers`.")
+
+        # Convolutional layers setup
+        conv_channels = [1] + list(out_channels)
+        self.cs = ModuleList([
+            nn.Conv1d(conv_channels[i], conv_channels[i+1], kernel_size, stride=stride)
+            for i in range(conv_layers)
+        ])
+        self.pool = nn.AvgPool1d(kernel_size=kernel_size, stride=stride)        
+        # Dynamic calculation of the fully connected layer's input size
+        self.input_fc_size = self.calculate_conv_output_size() + global_vars
+    # Fully connected layers setup
+        self.fc1 = nn.Linear(self.input_fc_size, fc_size)
+        self.fcs = ModuleList([nn.Linear(fc_size, fc_size) for _ in range(fc_layers - 1)])
+        self.fout = nn.Linear(fc_size, n_outputs)
+        self.params = {}
+        for key in kwargs:
+            setattr(self, key, kwargs[key])
+            if key in self.params:
+                self.params[key] = kwargs[key]
+        # also but all the attributes that are numbers on params
+        for key in self.__dict__:
+            if isinstance(self.__dict__[key], (int, float)) or isinstance(self.__dict__[key], (int, float)):
+                self.params[key] = self.__dict__[key]
+
+
+    def calculate_conv_output_size(self):
+        input_size = self.local_vars
+        kernel_size = self.kernel_size
+        out_channels = self.out_channels
+        conv_layers = self.conv_layers
+        output_size = input_size
+        for i, conv_layer in enumerate(self.cs):
+            # exmaple forward 
+            # x1 = model.estimator.cs[0](torch.tensor(X[:,:-5]).float().cuda().unsqueeze(1))
+            # x1_pooled = F.avg_pool1d(x1, kernel_size=model.kernel_size, stride=1)
+            # x1_pooled.shape
+            kernel_size = conv_layer.kernel_size[0]
+            padding = conv_layer.padding[0]
+            stride = conv_layer.stride[0]
+            pool = self.pool
+            output_size = ((output_size - kernel_size + 2*padding) / stride) + 1
+            pool_stride = pool.stride[0]
+            pool_kernel = pool.kernel_size[0]
+            output_size = ((output_size - pool_kernel + 2*padding) / pool_stride) + 1
+
+        return int(output_size * out_channels[-1]) 
+
+
+    def forward(self, x):
+        observations = x.shape[0]
+        total_features = x.shape[1]
+        if self.global_vars > 0:
+            x_global = x[:, -self.global_vars:].float()
+            x_local = x[:, :-self.global_vars].float()
+        else:
+            x_global = None
+            x_local = x.float()
+        x_local = x_local.reshape(observations, 1, -1)
+        for conv in self.cs:
+            x_local = F.relu(conv(x_local))
+            x_local = self.pool(x_local)
+        x_local = torch.flatten(x_local, 1)
+        if x_global is not None:
+            x_local = torch.cat([x_local, x_global], dim=1)
+        x = F.relu(self.fc1(x_local))
+        for fc in self.fcs:
+            x = F.relu(fc(x))
+        
+        x = self.fout(x)
+        return x
 
 
     def update_params(self, config: dict):
